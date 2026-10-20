@@ -1,0 +1,23 @@
+[Unit]
+Description=pCloud Video Streamer
+After=network-online.target rclone-pcloud.service
+Wants=network-online.target rclone-pcloud.service
+
+[Service]
+Type=simple
+User=jorge
+Group=jorge
+WorkingDirectory=/home/jorge/orca/workspaces/Video-Home/Versión-inicial
+Environment="VIDEO_ROOT=/mnt/pcloud/My Videos"
+Environment=PORT=3001
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node server.js
+Restart=always
+RestartSec=10
+StartLimitInterval=60
+StartLimitBurst=3
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
