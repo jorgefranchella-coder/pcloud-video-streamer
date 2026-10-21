@@ -93,7 +93,7 @@ Cada análisis visual recibe `visual_revision`; las asignaciones se ligan a esa 
 
 ## Búsqueda e interfaz
 
-FTS5 usa tokenización Unicode con eliminación de diacríticos. Se extraen hasta ocho palabras de la consulta, cada una como prefijo, combinadas con AND. Se filtran fechas inclusivas, se excluyen `missing` y se ordena por fecha descendente y ruta; no por relevancia. La búsqueda devuelve videos, no segmentos coincidentes.
+FTS5 usa tokenización Unicode con eliminación de diacríticos. Se extraen hasta ocho palabras de la consulta, cada una como prefijo, combinadas con AND. Se filtran fechas inclusivas y se excluyen `missing`. Con consulta, los resultados priorizan relevancia; sin consulta, se ordenan por fecha descendente y ruta. La búsqueda devuelve videos, no segmentos coincidentes.
 
 `public/app.js` administra árbol, reproducción, fichas, búsqueda, directorio de personas y consulta periódica del progreso. No hay framework ni compilación del frontend. Tailwind se descarga desde CDN y la tipografía desde Google Fonts. El token de edición permanece en memoria de la página.
 
@@ -101,4 +101,4 @@ FTS5 usa tokenización Unicode con eliminación de diacríticos. Se extraen hast
 
 La validación de rutas usa resolución absoluta, límites relativos y comprobación del destino real cuando existe. El servidor escucha en `0.0.0.0`. Si `ACCESS_TOKEN` se configura, la API y el streaming requieren una cookie de sesión HttpOnly; sin él, el acceso permanece abierto por compatibilidad. CORS admite same-origin y orígenes exactos configurados. Las mutaciones de nombres requieren además su bearer token con comparación de tiempo constante.
 
-El árbol y las rutas de navegación interpolan nombres en `innerHTML`; es un riesgo de inyección HTML que debe corregirse. SQLite, los registros y las fichas contienen información personal. Los fotogramas se envían a OpenRouter y al proveedor seleccionado por ese servicio; la política de retención depende del proveedor y no la controla este código. La autorización de envío de fotogramas ya forma parte del alcance del proyecto; el audio sigue fuera del procesamiento actual.
+Los nombres y las rutas del árbol se agregan como texto y nodos DOM, no como HTML ejecutable. SQLite, los registros y las fichas contienen información personal. Los fotogramas se envían a OpenRouter y al proveedor seleccionado por ese servicio; la política de retención depende del proveedor y no la controla este código. La autorización de envío de fotogramas ya forma parte del alcance del proyecto; el audio sigue fuera del procesamiento actual.

@@ -8,7 +8,7 @@ Base local del despliegue systemd: `http://127.0.0.1:3001`. Todas las rutas de a
 
 Si `ACCESS_TOKEN` está configurado, toda la API y la reproducción requieren una sesión por cookie `HttpOnly` de 12 horas. La interfaz solicita el token y lo intercambia por la cookie; el token no aparece en URLs ni en enlaces de video. `GET /api/access/status` informa si se requiere acceso y si la sesión actual está autenticada; `POST /api/access/session` recibe `{ "token": "..." }`; `DELETE /api/access/session` cierra la sesión. Sin `ACCESS_TOKEN`, el acceso conserva el comportamiento abierto anterior. Las dos rutas de edición exigen además `Authorization: Bearer <METADATA_EDIT_TOKEN>`. CORS permite solicitudes same-origin y, solo si se configura, los orígenes HTTP(S) exactos de `CORS_ORIGINS`; un origen no autorizado recibe `403`. Las respuestas `/api` usan `Cache-Control: no-store`. El cuerpo JSON está limitado a 4 KiB.
 
-Errores comunes de edición: `503` si no se configuró el token, `401` si no coincide, `400` para datos inválidos y `404` cuando no existe el video/observación solicitado. JSON malformado devuelve `400`, cuerpos mayores a 4 KiB devuelven `413` y otros fallos internos del API devuelven `500`; los errores no incluyen detalles internos.
+Errores comunes de edición: `503` si no se configuró el token, `401` si no coincide, `400` para datos inválidos y `404` cuando no existe el video/observación solicitado. JSON malformado devuelve `400`, cuerpos mayores a 4 KiB devuelven `413` y otros fallos internos del API devuelven `500`; los errores no incluyen detalles internos. Una ruta `/api` inexistente devuelve `404` con `{ "error": "API route not found" }` (si hay autenticación, primero debe existir una sesión válida).
 
 ## Rutas
 
@@ -62,7 +62,7 @@ curl --get http://127.0.0.1:3001/api/stream \
 
 Con rango aceptado devuelve `206`, `Content-Range`, `Content-Length` y tipo MIME. Sin Range devuelve el archivo completo con `200`. Un rango rechazado devuelve `416` con `Content-Range: bytes */tamaño`. Ruta ausente: `400`; ruta fuera de raíz: `403`; archivo inexistente/no regular: `404`.
 
-La implementación acepta un rango simple `bytes=inicio-fin`, `bytes=inicio-` o `bytes=-sufijo`; recorta un extremo final mayor que el tamaño del archivo. Los rangos múltiples no se sirven y reciben `416`. Si el cliente cierra la conexión, se destruye el stream de lectura. La ruta de streaming no restringe por extensión: puede entregar cualquier archivo regular accesible dentro de `VIDEO_ROOT`, aunque no aparezca en el listado.
+La implementación acepta un rango simple `bytes=inicio-fin`, `bytes=inicio-` o `bytes=-sufijo`; recorta un extremo final mayor que el tamaño del archivo. Los rangos múltiples no se sirven y reciben `416`. Si el cliente cierra la conexión, se destruye el stream de lectura. La ruta de streaming solo admite las extensiones de video enumeradas en [Uso](uso.md), aunque el archivo todavía no aparezca en el listado.
 
 ## Ficha
 
