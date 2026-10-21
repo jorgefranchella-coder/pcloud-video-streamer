@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
-const { db, getByPath, upsert, withJobLock, setWorkerConfiguration } = require('./metadata-store');
+const { db, getByPath, upsert, withJobLock, setWorkerConfiguration, setWorkerActivity } = require('./metadata-store');
 const { indexerConfiguration } = require('./config');
 
 const execFileAsync = promisify(execFile);
@@ -93,6 +93,7 @@ async function scanDirectory(relativeDir, scanId, counters) {
       counters.seen++;
       if (counters.seen % 100 === 0) {
         db.prepare('UPDATE scans SET seen_count = ? WHERE id = ?').run(counters.seen, scanId);
+        setWorkerActivity('indexer', { phase: 'inventory', path: normalizedPath, result: `${counters.seen} videos recorridos` });
       }
       if (INVENTORY_ONLY) continue;
       if (previous && previous.fingerprint === fingerprint && previous.status === 'done') continue;
@@ -100,6 +101,7 @@ async function scanDirectory(relativeDir, scanId, counters) {
       if (MAX_PROBES > 0 && counters.attempted >= MAX_PROBES) continue;
       counters.attempted++;
 
+      setWorkerActivity('indexer', { phase: 'ffprobe', path: normalizedPath });
       const metadata = await probeVideo(fullPath, normalizedPath, stat);
       db.prepare(`UPDATE videos SET status = 'done', duration_ms = @duration_ms,
         width = @width, height = @height, codec = @codec, recorded_at = @recorded_at,
@@ -135,6 +137,7 @@ async function runScanLocked() {
       .run(scan.lastInsertRowid);
     db.prepare("UPDATE scans SET status = 'done', completed_at = CURRENT_TIMESTAMP, seen_count = ? WHERE id = ?")
       .run(counters.seen, scan.lastInsertRowid);
+    setWorkerActivity('indexer', { result: `${counters.probed} fichas técnicas completas` });
     console.log(JSON.stringify({ scan_id: scan.lastInsertRowid, ...counters }));
   } catch (error) {
     db.prepare("UPDATE scans SET status = 'failed', completed_at = CURRENT_TIMESTAMP, seen_count = ?, error = ? WHERE id = ?")

@@ -43,7 +43,7 @@ Las fechas candidatas proceden de etiquetas de captura de contenedor/streams, de
 ## Análisis visual
 
 1. Reclama el bloqueo exclusivo de la etapa visual, registra la configuración sin secretos y exige `OPENROUTER_API_KEY`. Si una instancia anterior dejó filas `running`, las convierte en fallidas con reintento diferido.
-2. Selecciona videos con estado técnico `done`, prioriza pendientes y después fallidos transitorios vencidos cuando `RETRY_VISUAL_FAILED=1`. `VISUAL_VIDEO_ID` selecciona un video concreto para regenerarlo.
+2. Selecciona videos con estado técnico `done`, prioriza pendientes y después fallidos transitorios vencidos cuando `RETRY_VISUAL_FAILED=1`. `VISUAL_VIDEO_ID` selecciona un video concreto para regenerarlo. El máximo automático de intentos por fingerprint es cinco por defecto.
 3. Comprueba ruta real, tamaño y mtime contra el fingerprint guardado.
 4. Extrae imágenes al 8 %, 35 %, 65 % y 92 % de la duración, redondeando a segundos y eliminando duplicados. Usa el segundo cero si no hay duración o es menor a dos segundos.
 5. Genera JPEG de hasta 768 × 768 conservando proporciones, con 45 segundos de timeout por extracción. Rechaza una imagen mayor de 700.000 bytes. Si falla algún fotograma puede continuar con los restantes; si fallan todos, falla el video.
@@ -63,6 +63,9 @@ Archivo: `DATA_DIR/videos.sqlite`. Se habilitan WAL, claves foráneas y espera d
 |---|---|
 | `videos` | `id`, ruta única, tamaño, mtime, fingerprint; estado y error técnicos; duración/resolución/códec; fecha/evidencia; estado, título, resumen, incertidumbre, JSON de contenido y uso visual; modelo/prompt; marcas temporales; `last_seen_scan` |
 | `scans` | ID, inicio, fin, estado, cantidad vista y error del recorrido |
+| `process_locks` | Bloqueo de etapa con token, PID, host y adquisición |
+| `worker_runs` | Último estado de ejecución, heartbeat, archivo/fase actual y resultado/error |
+| `worker_configuration` | Configuración efectiva no secreta registrada por cada etapa |
 | `people` | ID, nombre único con colación SQLite `NOCASE`, creación |
 | `video_person_observations` | Clave `(video_id, analysis_revision, observation_index)`, descripción/segundo observados, persona y confirmación; conserva identidades anteriores para revisión sin asignarlas a otra ficha |
 | `video_fts` | FTS5 sobre ruta, título, resumen y texto visual agregado; contenido externo en `videos`, sincronizado con triggers |
@@ -79,7 +82,7 @@ Cada análisis visual recibe `visual_revision`; las asignaciones se ligan a esa 
 | Video visual | Nulo se interpreta como pendiente; `pending`, `running`, `done`, `failed` |
 | Recorrido | `running`, `done`, `failed`, `interrupted`; al tomar el bloqueo, el siguiente indexador marca como interrumpidos los recorridos que quedaron `running` |
 
-`process_locks` serializa instancias del indexador entre sí y del analizador entre sí. Usa PID y nombre de host para identificar al propietario y recuperar registros abandonados en el mismo servidor. La recuperación automática presupone que los procesos usan la misma base SQLite local y el mismo host; no es un coordinador distribuido para bases compartidas entre servidores.
+`process_locks` serializa instancias del indexador entre sí y del analizador entre sí. Usa PID y nombre de host para identificar al propietario y recuperar registros abandonados en el mismo servidor. `worker_runs` conserva heartbeat y actividad para el progreso visible; `stale` se infiere cuando el PID local desaparece. La recuperación automática presupone que los procesos usan la misma base SQLite local y el mismo host; no es un coordinador distribuido para bases compartidas entre servidores.
 
 ## Búsqueda e interfaz
 

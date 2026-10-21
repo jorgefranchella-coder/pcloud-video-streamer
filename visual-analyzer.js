@@ -3,7 +3,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
-const { db, buildVisualSearchText, withJobLock, setWorkerConfiguration } = require('./metadata-store');
+const { db, buildVisualSearchText, withJobLock, setWorkerConfiguration, setWorkerActivity } = require('./metadata-store');
 const { visualConfiguration } = require('./config');
 
 const execFileAsync = promisify(execFile);
@@ -153,6 +153,7 @@ async function analyzeVideo(row, apiKey) {
     WHERE id = ? AND fingerprint = ? AND status = 'done' RETURNING visual_attempts`).get(row.id, row.fingerprint);
   if (!claim) return;
   const attemptNumber = claim.visual_attempts;
+  setWorkerActivity('visual-analyzer', { videoId: row.id, path: row.relative_path, phase: 'extrayendo fotogramas' });
   try {
     const { fullPath, stat } = await safeVideoPath(row.relative_path);
     if (`${stat.size}:${Math.round(stat.mtimeMs)}` !== row.fingerprint) throw new Error('Video changed since inventory; scan it again');
@@ -165,6 +166,7 @@ async function analyzeVideo(row, apiKey) {
       }
     }
     if (!frames.length) throw new Error('No frames could be extracted');
+    setWorkerActivity('visual-analyzer', { videoId: row.id, path: row.relative_path, phase: 'analizando con el proveedor' });
     const { result, usage } = await describeFrames(frames, apiKey);
     const finalStat = await fs.promises.stat(fullPath);
     if (`${finalStat.size}:${Math.round(finalStat.mtimeMs)}` !== row.fingerprint) throw new Error('Video changed during analysis');
@@ -195,6 +197,7 @@ async function analyzeVideo(row, apiKey) {
       if (!updated.changes) throw new Error('Video changed in the index during analysis');
     });
     persistResult();
+    setWorkerActivity('visual-analyzer', { phase: null, result: `Ficha visual guardada para ${row.relative_path}` });
     console.log(JSON.stringify({ video_id: row.id, frames: frames.length, model: MODEL, usage }));
   } catch (error) {
     const message = String(error.message).slice(0, 1000);
@@ -219,6 +222,10 @@ async function analyzeVideo(row, apiKey) {
     db.prepare(`UPDATE videos SET visual_status = 'failed', visual_error = ?, visual_error_class = ?,
         visual_next_attempt_at = ? WHERE id = ? AND fingerprint = ? AND visual_status = 'running'`)
       .run(message, errorClass, retryAt, row.id, row.fingerprint);
+    setWorkerActivity('visual-analyzer', {
+      phase: retryAt ? 'esperando reintento' : 'fallo sin reintento automático',
+      videoId: row.id, path: row.relative_path, error: message
+    });
     console.error(`Visual analysis failed for video ${row.id}: ${error.message}`);
     if (authenticationFailure || providerRateLimit || providerServerFailure) throw error;
   }

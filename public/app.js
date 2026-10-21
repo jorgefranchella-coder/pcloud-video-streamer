@@ -140,6 +140,17 @@ function renderProcessProgress(status) {
   ].filter(Boolean).join(' · ');
 
   const configured = status.worker_configuration || {};
+  const activity = status.worker_activity || {};
+  const visualWorker = activity['visual-analyzer'];
+  if (visualWorker?.active) {
+    const current = visualWorker.current_path ? ` · ${visualWorker.current_path}` : '';
+    const phase = visualWorker.phase ? ` (${visualWorker.phase})` : '';
+    visualProgressDetail.textContent += ` · Procesando${current}${phase}`;
+  } else if (visualWorker?.stale) {
+    visualProgressDetail.textContent += ' · El último proceso visual se interrumpió; se recuperará al reiniciar el analizador.';
+  } else if (count(visual.running)) {
+    visualProgressDetail.textContent += ' · Hay fichas running, pero no se confirma un proceso visual activo.';
+  }
   const settings = [];
   if (configured.technical) {
     const effective = configured.technical;
@@ -169,7 +180,16 @@ function renderProcessProgress(status) {
       ? date.toLocaleString('es-AR', { dateStyle: 'medium', timeStyle: 'short' })
       : '';
     if (scan.status === 'running') {
-      scanProgressStatus.textContent = `Inventario en curso: ${format(scan.seen_count)} videos recorridos${formattedDate ? ` · iniciado ${formattedDate}` : ''}`;
+      const indexerWorker = activity.indexer;
+      if (indexerWorker?.stale) {
+        scanProgressStatus.textContent = `Inventario interrumpido: el proceso dejó de responder tras recorrer ${format(scan.seen_count)} videos. El próximo inicio lo reconciliará.`;
+      } else if (!indexerWorker?.active) {
+        scanProgressStatus.textContent = `El último inventario figura en curso tras ${format(scan.seen_count)} videos, pero no se confirma un indexador activo.`;
+      } else {
+        const current = indexerWorker?.current_path ? ` · ${indexerWorker.current_path}` : '';
+        const phase = indexerWorker?.phase ? ` (${indexerWorker.phase})` : '';
+        scanProgressStatus.textContent = `Inventario en curso: ${format(scan.seen_count)} videos recorridos${current}${phase}${formattedDate ? ` · iniciado ${formattedDate}` : ''}`;
+      }
       scanProgressStatus.classList.remove('hidden');
     } else if (scan.status === 'failed' || scan.status === 'interrupted') {
       let reason = '';

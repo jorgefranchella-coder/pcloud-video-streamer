@@ -59,6 +59,46 @@ db.exec(`CREATE TABLE IF NOT EXISTS worker_configuration (
   configuration_json TEXT NOT NULL,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 )`);
+db.exec(`CREATE TABLE IF NOT EXISTS worker_runs (
+  worker TEXT PRIMARY KEY,
+  status TEXT NOT NULL,
+  owner_pid INTEGER NOT NULL,
+  owner_host TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  heartbeat_at TEXT NOT NULL,
+  current_video_id INTEGER,
+  current_path TEXT,
+  phase TEXT,
+  last_result TEXT,
+  last_error TEXT,
+  finished_at TEXT
+)`);
+
+function startWorkerRun(worker) {
+  db.prepare(`INSERT INTO worker_runs
+      (worker, status, owner_pid, owner_host, started_at, heartbeat_at, current_video_id, current_path, phase, last_error, finished_at)
+    VALUES (?, 'running', ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL, NULL, 'starting', NULL, NULL)
+    ON CONFLICT(worker) DO UPDATE SET status = 'running', owner_pid = excluded.owner_pid,
+      owner_host = excluded.owner_host, started_at = CURRENT_TIMESTAMP, heartbeat_at = CURRENT_TIMESTAMP,
+      current_video_id = NULL, current_path = NULL, phase = 'starting', last_error = NULL, finished_at = NULL`)
+    .run(worker, process.pid, os.hostname());
+}
+
+function touchWorkerRun(worker) {
+  db.prepare("UPDATE worker_runs SET heartbeat_at = CURRENT_TIMESTAMP WHERE worker = ? AND status = 'running'").run(worker);
+}
+
+function setWorkerActivity(worker, { phase = null, videoId = null, path = null, result = null, error = null } = {}) {
+  db.prepare(`UPDATE worker_runs SET heartbeat_at = CURRENT_TIMESTAMP, phase = ?, current_video_id = ?,
+      current_path = ?, last_result = COALESCE(?, last_result), last_error = ?
+    WHERE worker = ? AND status = 'running'`).run(phase, videoId, path, result, error, worker);
+}
+
+function finishWorkerRun(worker, status, error = null) {
+  db.prepare(`UPDATE worker_runs SET status = ?, heartbeat_at = CURRENT_TIMESTAMP,
+      phase = NULL, current_video_id = NULL, current_path = NULL, last_error = ?, finished_at = CURRENT_TIMESTAMP
+    WHERE worker = ?`).run(status, error, worker);
+}
 
 function withJobLock(name, operation) {
   const token = crypto.randomUUID();
@@ -78,9 +118,23 @@ function withJobLock(name, operation) {
       .run(name, token, process.pid, host);
   });
   acquire.immediate();
-  return Promise.resolve().then(operation).finally(() => {
-    db.prepare('DELETE FROM process_locks WHERE name = ? AND owner_token = ?').run(name, token);
-  });
+  return (async () => {
+    let heartbeat;
+    try {
+      startWorkerRun(name);
+      heartbeat = setInterval(() => touchWorkerRun(name), 15000);
+      heartbeat.unref();
+      const result = await operation();
+      finishWorkerRun(name, 'done');
+      return result;
+    } catch (error) {
+      finishWorkerRun(name, 'failed', String(error.message).slice(0, 1000));
+      throw error;
+    } finally {
+      if (heartbeat) clearInterval(heartbeat);
+      db.prepare('DELETE FROM process_locks WHERE name = ? AND owner_token = ?').run(name, token);
+    }
+  })();
 }
 
 const visualColumns = {
@@ -248,13 +302,29 @@ function status() {
     FROM videos WHERE visual_status = 'failed' AND visual_next_attempt_at IS NOT NULL`).get();
   const workerConfiguration = Object.fromEntries(db.prepare('SELECT worker, configuration_json, updated_at FROM worker_configuration')
     .all().map(row => [row.worker, { ...JSON.parse(row.configuration_json), updated_at: row.updated_at }]));
+  const workerActivity = Object.fromEntries(db.prepare('SELECT * FROM worker_runs').all().map(row => {
+    let alive = null;
+    if (row.owner_host === os.hostname()) {
+      alive = true;
+      try { process.kill(row.owner_pid, 0); }
+      catch (error) { alive = error.code === 'ESRCH' ? false : true; }
+    }
+    return [row.worker, {
+      status: row.status, active: row.status === 'running' && alive === true,
+      stale: row.status === 'running' && alive === false, started_at: row.started_at,
+      heartbeat_at: row.heartbeat_at, current_video_id: row.current_video_id,
+      current_path: row.current_path, phase: row.phase, last_result: row.last_result,
+      last_error: row.last_error, finished_at: row.finished_at
+    }];
+  }));
   return {
     counts: Object.fromEntries(counts.map(row => [row.status, row.count])),
     visual_counts: Object.fromEntries(visualCounts.map(row => [row.status, row.count])),
     visual_ready_counts: Object.fromEntries(visualReadyCounts.map(row => [row.status, row.count])),
     visual_retry_wait: visualRetryWait,
     last_scan: scan || null,
-    worker_configuration: workerConfiguration
+    worker_configuration: workerConfiguration,
+    worker_activity: workerActivity
   };
 }
 
@@ -383,5 +453,5 @@ function setVideoPerson({ relativePath, observationIndex, personId, personName }
 module.exports = {
   db, getByPath, getById, upsert, parseVideo, status, search, buildVisualSearchText,
   setConfirmedPeople, listPeople, identifiedPeopleForVideo, staleIdentificationsForVideo,
-  setVideoPerson, withJobLock, setWorkerConfiguration
+  setVideoPerson, withJobLock, setWorkerConfiguration, setWorkerActivity
 };

@@ -94,7 +94,7 @@ Esta ejecución no cambia el estado de la unidad systemd. El analizador visual t
 | JSON inválido o esquema incompatible | Revisar `visual_error`; el proveedor debe aceptar imágenes y salida estructurada. Reintentar de forma acotada o revisar el modelo |
 | `ffprobe` o `ffmpeg` lento | Ver montaje, caché y archivo actual. Un timeout de proceso no garantiza respuesta inmediata de una lectura FUSE bloqueada |
 | Contador recorrido en cero | Se persiste cada 100 archivos; contrastar crecimiento de fichas y proceso activo |
-| `running` tras un cierre abrupto | Una nueva ejecución visual recupera esos registros después de adquirir su bloqueo. Si el bloqueo del mismo host no se recupera, comprobar el PID informado; no borrar el bloqueo mientras ese proceso siga vivo |
+| `running` tras un cierre abrupto | La interfaz marca `stale` cuando el PID del mismo host ya no existe. El indexador reconcilia recorridos abandonados al iniciar; el analizador visual programa el video interrumpido para reintento diferido. No borrar el bloqueo mientras su proceso siga vivo |
 | SIGSEGV / `core-dump` | Consultar journal y, si está instalado, `coredumpctl info`; revisar runtime Node y módulo nativo. La causa observada sigue sin determinar |
 | Servicio técnico sigue `failed` tras un lote manual exitoso | Son estados diferentes. `sudo systemctl reset-failed pcloud-video-indexer.service` limpia el registro de systemd; no repara ni procesa archivos |
 | Video visible pero no reproducible | Comprobar códec del navegador y lectura remota. No existe transcodificación |

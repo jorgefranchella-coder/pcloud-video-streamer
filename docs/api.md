@@ -105,9 +105,11 @@ Ejemplo basado en la ejecución documentada, no respuesta fija. Las claves de es
 - `visual_ready_counts`: solo videos técnicos `done`.
 - Timestamps de SQLite: UTC, en texto sin sufijo de zona. La interfaz los interpreta como UTC y los muestra en hora local.
 
-No se exponen PID, estado de systemd, archivo actualmente procesado, próxima ejecución ni historial de lotes visuales.
+`worker_activity` informa si el PID local sigue vivo, heartbeat, etapa y archivo actual sin exponer el PID. No expone estado de systemd ni historial completo de lotes visuales.
 
 `worker_configuration` registra la última configuración no secreta usada por cada etapa (`technical` y `visual`), además de `updated_at`. Si una etapa nunca inició, su entrada no existe. No representa un proceso vivo ni lee cambios posteriores en los archivos de entorno hasta el siguiente arranque.
+
+`worker_activity` contiene las claves `indexer` y `visual-analyzer` después de su primer inicio, con `status`, `active`, `stale`, `started_at`, `heartbeat_at`, `current_video_id`, `current_path`, `phase`, `last_result`, `last_error` y `finished_at`. `stale=true` significa que el registro sigue en `running` pero el PID de este mismo host ya no existe.
 
 `visual_retry_wait` informa cuántos fallos tienen reintento pendiente y el próximo horario. Los errores transitorios usan espera exponencial hasta 24 horas; `429` comienza en cinco minutos y otros transitorios en un minuto. Cada fingerprint admite hasta `MAX_VISUAL_ATTEMPTS` intentos automáticos (por defecto cinco). Los errores `401`, `403` y otros `4xx` no reciben reintento automático. `RETRY_VISUAL_FAILED=1` es necesario para tomar fallos ya vencidos en una ejecución posterior.
 
