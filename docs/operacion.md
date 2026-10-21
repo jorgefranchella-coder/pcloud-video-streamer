@@ -107,34 +107,25 @@ Esta ejecución no cambia el estado de la unidad systemd. El analizador visual t
 
 Respaldar código/configuración, base SQLite, `DATA_DIR/evidence` y credenciales de rclone/proveedor por canales apropiados para cada contenido. Los originales de video son una fuente separada. La caché VFS y `node_modules` se pueden reconstruir; las confirmaciones manuales de personas no se recuperan simplemente volviendo a analizar.
 
-Las imágenes de evidencia viven en `DATA_DIR/evidence/<video_id>/<revision>` y se conservan solo para la revisión visual vigente después de un análisis exitoso. Para respaldar base e imágenes como un conjunto coherente, detener los dos servicios de lote, ejecutar el backup SQLite y copiar ese directorio bajo permisos privados; iniciar nuevamente los servicios al terminar.
+Las imágenes de evidencia viven en `DATA_DIR/evidence/<video_id>/<revision>`. Además de la revisión activa, se conservan las anteriores mientras tengan identificaciones pendientes. Para respaldar base e imágenes como un conjunto coherente, detener servidor, timers, trabajadores y procesos manuales; anotar cuáles estaban activos para restaurarlos al terminar.
 
-Con WAL activo, no copiar únicamente `videos.sqlite` mientras hay escritores: puede faltar información aún presente en el WAL. Desde la raíz del proyecto, una copia consistente puede crearse mediante la API de backup de la dependencia instalada:
-
-```bash
-video_backup_dir="${XDG_STATE_HOME:-$HOME/.local/state}/pcloud-video-backups"
-mkdir -p "$video_backup_dir"
-chmod 700 "$video_backup_dir"
-DB_BACKUP="$video_backup_dir/videos-$(date +%Y%m%d-%H%M%S).sqlite" \
-node <<'NODE'
-const Database = require('better-sqlite3');
-const path = require('path');
-const source = path.join(process.env.DATA_DIR || path.join(process.cwd(), 'data'), 'videos.sqlite');
-const db = new Database(source, { readonly: true });
-db.backup(process.env.DB_BACKUP)
-  .then(() => console.log('Respaldo completado'))
-  .catch(error => { console.error(error.message); process.exitCode = 1; })
-  .finally(() => db.close());
-NODE
-```
-
-Ajustar `DATA_DIR` si la base no está en `./data`. El ejemplo guarda las copias fuera del repositorio, en un directorio privado del usuario. Replicarlas a un destino de respaldo independiente. Verificar integridad y lectura del respaldo antes de considerarlo recuperable; si se dispone de sqlite3:
+Con WAL activo, no copiar únicamente `videos.sqlite` mientras hay escritores: puede faltar información aún presente en el WAL. El comando genera una copia mediante la API SQLite de la dependencia instalada, verifica su integridad y copia las imágenes con permisos privados. Ejecutarlo desde la raíz del proyecto:
 
 ```bash
-sqlite3 /ruta/al/respaldo.sqlite 'PRAGMA integrity_check;'
+sudo systemctl stop pcloud-video-indexer.timer pcloud-video-visual.timer
+sudo systemctl stop pcloud-video-indexer.service pcloud-video-visual.service pcloud-video-streamer.service
+pgrep -af 'node (indexer|visual-analyzer|server)\.js'
+DATA_DIR="$PWD/data" npm run backup -- /ruta/privada/pcloud-video-backups
 ```
 
-Resultado esperado: `ok`. Este documento no ejecutó una restauración.
+Si el timer visual no está instalado, quitarlo del comando. Si `pgrep` muestra procesos manuales, esperar a que terminen o detenerlos antes de copiar. Cada copia queda en un directorio fechado con `videos.sqlite`, `evidence/` si existe, `manifest.json` y un archivo `COMPLETE`. El programa falla si la base no pasa `integrity_check`. Replicar las copias a un destino independiente.
+
+```bash
+sqlite3 /ruta/privada/pcloud-video-backups/pcloud-video-FECHA-PID/videos.sqlite 'PRAGMA integrity_check;'
+sudo systemctl start pcloud-video-streamer.service
+```
+
+Resultado esperado: `ok`. Reactivar solo los timers que estaban activos antes del respaldo. Este procedimiento no sustituye una restauración de prueba; este documento todavía no ejecutó una.
 
 ## Restauración
 
