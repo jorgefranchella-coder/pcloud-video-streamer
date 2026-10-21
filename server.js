@@ -59,6 +59,7 @@ app.get('/api/metadata', (req, res) => {
   res.json({
     ...metadata.parseVideo(row),
     identified_people: metadata.identifiedPeopleForVideo(row.id),
+    stale_identifications: metadata.staleIdentificationsForVideo(row.id),
     can_edit_people: Boolean(process.env.METADATA_EDIT_TOKEN)
   });
 });

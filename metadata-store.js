@@ -95,6 +95,7 @@ const visualColumns = {
   visual_fingerprint: 'TEXT',
   visual_error: 'TEXT',
   visual_analyzed_at: 'TEXT',
+  visual_revision: 'TEXT',
   confirmed_people_json: "TEXT NOT NULL DEFAULT '[]'"
 };
 const existingColumns = new Set(db.prepare('PRAGMA table_info(videos)').all().map(column => column.name));
@@ -133,15 +134,39 @@ db.exec(`
     name TEXT NOT NULL COLLATE NOCASE UNIQUE,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
-  CREATE TABLE IF NOT EXISTS video_person_observations (
+`);
+
+db.prepare(`UPDATE videos SET visual_revision = 'legacy:' || id || ':' || fingerprint
+  WHERE visual_status = 'done' AND visual_revision IS NULL`).run();
+const observationColumns = new Set(db.prepare('PRAGMA table_info(video_person_observations)').all().map(column => column.name));
+const migrateObservations = db.transaction(() => {
+  const legacy = observationColumns.size && !observationColumns.has('analysis_revision');
+  if (legacy) db.exec('ALTER TABLE video_person_observations RENAME TO video_person_observations_legacy');
+  db.exec(`CREATE TABLE IF NOT EXISTS video_person_observations (
     video_id INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+    analysis_revision TEXT NOT NULL,
     observation_index INTEGER NOT NULL,
+    observation_description TEXT NOT NULL DEFAULT '',
+    at_seconds REAL NOT NULL DEFAULT 0,
     person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
     confirmed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (video_id, observation_index)
-  );
-  CREATE INDEX IF NOT EXISTS video_person_person_idx ON video_person_observations(person_id);
-`);
+    PRIMARY KEY (video_id, analysis_revision, observation_index)
+  )`);
+  if (legacy) {
+    db.exec(`INSERT INTO video_person_observations
+      (video_id, analysis_revision, observation_index, observation_description, at_seconds, person_id, confirmed_at)
+    SELECT old.video_id, COALESCE(videos.visual_revision, 'legacy:' || videos.id || ':' || videos.fingerprint),
+      old.observation_index,
+      COALESCE(json_extract(videos.visual_people_json, '$[' || old.observation_index || '].description'), ''),
+      COALESCE(json_extract(videos.visual_people_json, '$[' || old.observation_index || '].at_seconds'), 0),
+      old.person_id, old.confirmed_at
+      FROM video_person_observations_legacy old JOIN videos ON videos.id = old.video_id`);
+    db.exec('DROP TABLE video_person_observations_legacy');
+  }
+  db.exec(`CREATE INDEX IF NOT EXISTS video_person_person_idx ON video_person_observations(person_id);
+    CREATE INDEX IF NOT EXISTS video_person_video_revision_idx ON video_person_observations(video_id, analysis_revision)`);
+});
+migrateObservations.immediate();
 
 const getByPath = db.prepare('SELECT * FROM videos WHERE relative_path = ?');
 const getById = db.prepare('SELECT * FROM videos WHERE id = ?');
@@ -165,6 +190,7 @@ const upsert = db.prepare(`
     technical_json = CASE WHEN videos.fingerprint != excluded.fingerprint THEN '{}' ELSE videos.technical_json END,
     error = CASE WHEN videos.fingerprint != excluded.fingerprint THEN NULL ELSE videos.error END,
     visual_status = CASE WHEN videos.fingerprint != excluded.fingerprint THEN 'pending' ELSE videos.visual_status END,
+    visual_revision = CASE WHEN videos.fingerprint != excluded.fingerprint THEN NULL ELSE videos.visual_revision END,
     visual_title = CASE WHEN videos.fingerprint != excluded.fingerprint THEN NULL ELSE videos.visual_title END,
     visual_summary = CASE WHEN videos.fingerprint != excluded.fingerprint THEN NULL ELSE videos.visual_summary END,
     visual_uncertainty = CASE WHEN videos.fingerprint != excluded.fingerprint THEN NULL ELSE videos.visual_uncertainty END,
@@ -243,7 +269,8 @@ function setConfirmedPeople(relativePath, names) {
   const row = getByPath.get(relativePath);
   if (!row) return false;
   const assignedNames = db.prepare(`SELECT people.name FROM video_person_observations
-    JOIN people ON people.id = video_person_observations.person_id WHERE video_id = ?`).all(row.id).map(item => item.name);
+    JOIN people ON people.id = video_person_observations.person_id
+    WHERE video_id = ? AND analysis_revision = ?`).all(row.id, row.visual_revision).map(item => item.name);
   const searchText = buildVisualSearchText({
     events: JSON.parse(row.visual_events_json),
     people: JSON.parse(row.visual_people_json),
@@ -262,20 +289,33 @@ function listPeople() {
       COUNT(video_person_observations.video_id) AS appearances,
       COUNT(DISTINCT video_person_observations.video_id) AS videos
     FROM people LEFT JOIN video_person_observations ON people.id = video_person_observations.person_id
+      AND video_person_observations.analysis_revision = (SELECT visual_revision FROM videos WHERE id = video_person_observations.video_id)
+      AND (SELECT status FROM videos WHERE id = video_person_observations.video_id) != 'missing'
     GROUP BY people.id ORDER BY people.name COLLATE NOCASE`).all();
 }
 
 function identifiedPeopleForVideo(videoId) {
   return Object.fromEntries(db.prepare(`SELECT observation_index, people.id AS person_id, people.name
     FROM video_person_observations JOIN people ON people.id = video_person_observations.person_id
-    WHERE video_id = ?`).all(videoId).map(row => [row.observation_index, { id: row.person_id, name: row.name }]));
+    JOIN videos ON videos.id = video_person_observations.video_id
+    WHERE video_id = ? AND video_person_observations.analysis_revision = videos.visual_revision`)
+    .all(videoId).map(row => [row.observation_index, { id: row.person_id, name: row.name }]));
+}
+
+function staleIdentificationsForVideo(videoId) {
+  return db.prepare(`SELECT video_person_observations.observation_description AS description,
+      video_person_observations.at_seconds, people.id AS person_id, people.name, video_person_observations.confirmed_at
+    FROM video_person_observations JOIN people ON people.id = video_person_observations.person_id
+      JOIN videos ON videos.id = video_person_observations.video_id
+    WHERE video_id = ? AND video_person_observations.analysis_revision != COALESCE(videos.visual_revision, '')
+    ORDER BY video_person_observations.confirmed_at DESC, video_person_observations.observation_index`).all(videoId);
 }
 
 function setVideoPerson({ relativePath, observationIndex, personId, personName }) {
   const row = getByPath.get(relativePath);
   if (!row || !Number.isInteger(observationIndex) || observationIndex < 0) return false;
   const observations = JSON.parse(row.visual_people_json);
-  if (row.visual_status !== 'done' || observationIndex >= observations.length) return false;
+  if (row.visual_status !== 'done' || !row.visual_revision || observationIndex >= observations.length) return false;
 
   const assign = db.transaction(() => {
     if (personName) {
@@ -285,19 +325,23 @@ function setVideoPerson({ relativePath, observationIndex, personId, personName }
       personId = db.prepare('SELECT id FROM people WHERE name = ? COLLATE NOCASE').get(name)?.id;
     }
     if (personId == null) {
-      db.prepare('DELETE FROM video_person_observations WHERE video_id = ? AND observation_index = ?')
-        .run(row.id, observationIndex);
+      db.prepare('DELETE FROM video_person_observations WHERE video_id = ? AND analysis_revision = ? AND observation_index = ?')
+        .run(row.id, row.visual_revision, observationIndex);
     } else {
       const person = db.prepare('SELECT id FROM people WHERE id = ?').get(personId);
       if (!person) throw new Error('Persona desconocida');
-      db.prepare(`INSERT INTO video_person_observations (video_id, observation_index, person_id)
-        VALUES (?, ?, ?) ON CONFLICT(video_id, observation_index) DO UPDATE SET
+      db.prepare(`INSERT INTO video_person_observations
+        (video_id, analysis_revision, observation_index, observation_description, at_seconds, person_id)
+        VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(video_id, analysis_revision, observation_index) DO UPDATE SET
+          observation_description = excluded.observation_description, at_seconds = excluded.at_seconds,
           person_id = excluded.person_id, confirmed_at = CURRENT_TIMESTAMP`)
-        .run(row.id, observationIndex, personId);
+        .run(row.id, row.visual_revision, observationIndex, observations[observationIndex].description,
+          observations[observationIndex].at_seconds, personId);
     }
 
     const assignedNames = db.prepare(`SELECT people.name FROM video_person_observations
-      JOIN people ON people.id = video_person_observations.person_id WHERE video_id = ?`).all(row.id).map(item => item.name);
+      JOIN people ON people.id = video_person_observations.person_id
+      WHERE video_id = ? AND analysis_revision = ?`).all(row.id, row.visual_revision).map(item => item.name);
     const searchText = buildVisualSearchText({
       events: JSON.parse(row.visual_events_json), people: observations,
       places: JSON.parse(row.visual_places_json), keywords: JSON.parse(row.visual_keywords_json),
@@ -313,5 +357,6 @@ function setVideoPerson({ relativePath, observationIndex, personId, personName }
 
 module.exports = {
   db, getByPath, getById, upsert, parseVideo, status, search, buildVisualSearchText,
-  setConfirmedPeople, listPeople, identifiedPeopleForVideo, setVideoPerson, withJobLock
+  setConfirmedPeople, listPeople, identifiedPeopleForVideo, staleIdentificationsForVideo,
+  setVideoPerson, withJobLock
 };

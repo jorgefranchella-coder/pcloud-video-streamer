@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
 const { db, buildVisualSearchText, withJobLock } = require('./metadata-store');
@@ -165,6 +166,7 @@ async function analyzeVideo(row, apiKey) {
       keywords: result.keywords, dateClues: result.date_clues,
       confirmedPeople: JSON.parse(row.confirmed_people_json)
     });
+    const revision = crypto.randomUUID();
     const persistResult = db.transaction(() => {
       const updated = db.prepare(`UPDATE videos SET visual_status = 'done', visual_title = @title,
       visual_summary = @summary, visual_uncertainty = @uncertainty,
@@ -172,7 +174,7 @@ async function analyzeVideo(row, apiKey) {
       visual_places_json = @places, visual_keywords_json = @keywords,
       visual_date_clues_json = @date_clues, visual_search_text = @search_text,
       visual_model = @model, visual_prompt_version = @prompt_version,
-      visual_usage_json = @usage, visual_fingerprint = @fingerprint,
+      visual_usage_json = @usage, visual_fingerprint = @fingerprint, visual_revision = @revision,
       visual_error = NULL, visual_analyzed_at = CURRENT_TIMESTAMP
       WHERE id = @id AND fingerprint = @fingerprint`).run({
       id: row.id, fingerprint: row.fingerprint, title: result.title, summary: result.summary,
@@ -180,10 +182,9 @@ async function analyzeVideo(row, apiKey) {
       people: JSON.stringify(result.people), events: JSON.stringify(result.events),
       places: JSON.stringify(result.places), keywords: JSON.stringify(result.keywords),
       date_clues: JSON.stringify(result.date_clues), search_text: searchText, model: MODEL,
-      prompt_version: PROMPT_VERSION, usage: JSON.stringify(usage || {})
+      prompt_version: PROMPT_VERSION, usage: JSON.stringify(usage || {}), revision
       });
       if (!updated.changes) throw new Error('Video changed in the index during analysis');
-      db.prepare('DELETE FROM video_person_observations WHERE video_id = ?').run(row.id);
     });
     persistResult();
     console.log(JSON.stringify({ video_id: row.id, frames: frames.length, model: MODEL, usage }));

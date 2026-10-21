@@ -64,12 +64,12 @@ Archivo: `DATA_DIR/videos.sqlite`. Se habilitan WAL, claves foráneas y espera d
 | `videos` | `id`, ruta única, tamaño, mtime, fingerprint; estado y error técnicos; duración/resolución/códec; fecha/evidencia; estado, título, resumen, incertidumbre, JSON de contenido y uso visual; modelo/prompt; marcas temporales; `last_seen_scan` |
 | `scans` | ID, inicio, fin, estado, cantidad vista y error del recorrido |
 | `people` | ID, nombre único con colación SQLite `NOCASE`, creación |
-| `video_person_observations` | Clave `(video_id, observation_index)`, persona y confirmación; referencias a `videos` y `people` con borrado en cascada |
+| `video_person_observations` | Clave `(video_id, analysis_revision, observation_index)`, descripción/segundo observados, persona y confirmación; conserva identidades anteriores para revisión sin asignarlas a otra ficha |
 | `video_fts` | FTS5 sobre ruta, título, resumen y texto visual agregado; contenido externo en `videos`, sincronizado con triggers |
 
 Los campos JSON almacenan candidatos de fecha, resumen técnico, personas observadas, eventos, lugares, palabras clave, pistas de fecha, uso y nombres generales confirmados. La API conserva los campos JSON originales y agrega versiones parseadas.
 
-Las observaciones tienen descripción y segundo, pero no ID estable propio, recorte de rostro o embedding. Los nombres se asignan a la posición de una observación en la lista. `confirmed_people_json` es una lista general de nombres anterior al catálogo; se mantiene mediante una ruta PATCH de compatibilidad.
+Cada análisis visual recibe `visual_revision`; las asignaciones se ligan a esa revisión y guardan una copia de descripción/segundo. Tras regenerar o cambiar el fingerprint, la ficha no hereda esas identidades; la API las ofrece en `stale_identifications` para revisión humana. Las observaciones no tienen ID estable entre revisiones, recorte de rostro o embedding. `confirmed_people_json` es una lista general de nombres anterior al catálogo; se mantiene mediante una ruta PATCH de compatibilidad.
 
 ## Estados
 

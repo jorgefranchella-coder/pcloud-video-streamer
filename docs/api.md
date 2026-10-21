@@ -58,7 +58,7 @@ La implementación maneja el formato simple `bytes=inicio-fin` o `bytes=inicio-`
 
 ## Ficha
 
-`GET /api/metadata?path=...` devuelve la fila de `videos`, más las versiones parseadas de sus JSON, `identified_people` y `can_edit_people`. Un archivo puede existir en el montaje y devolver `404` aquí si todavía no está indexado. Ruta inválida: `400`.
+`GET /api/metadata?path=...` devuelve la fila de `videos`, más las versiones parseadas de sus JSON, `identified_people`, `stale_identifications` y `can_edit_people`. Las identidades de una revisión anterior se conservan en `stale_identifications` para revisión manual; nunca se aplican automáticamente a la nueva lista. Un archivo puede existir en el montaje y devolver `404` aquí si todavía no está indexado. Ruta inválida: `400`.
 
 Campos principales:
 
@@ -69,8 +69,8 @@ Campos principales:
 | Fecha | `recorded_at`, `date_precision`, `date_source`, `date_candidates` |
 | Visual | `visual_status`, `visual_title`, `visual_summary`, `visual_uncertainty`, `visual_error` |
 | Contenido visual | `visual_people`, `visual_events`, `visual_places`, `visual_keywords`, `visual_date_clues` |
-| Procedencia | `visual_model`, `visual_prompt_version`, `visual_usage_json`, `visual_fingerprint`, `visual_analyzed_at` |
-| Confirmaciones | `confirmed_people`, `identified_people`, `can_edit_people` |
+| Procedencia | `visual_model`, `visual_prompt_version`, `visual_usage_json`, `visual_fingerprint`, `visual_analyzed_at`, `visual_revision` |
+| Confirmaciones | `confirmed_people`, `identified_people`, `stale_identifications`, `can_edit_people` |
 
 El uso del proveedor se devuelve como texto JSON en `visual_usage_json`. Los campos originales `*_json` también acompañan a sus versiones parseadas; no hay un DTO separado.
 

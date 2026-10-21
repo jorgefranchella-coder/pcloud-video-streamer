@@ -668,8 +668,29 @@ function renderVisualMetadata(item) {
 function renderIdentityAssignments(item) {
   visualPeople.replaceChildren();
   const observations = item.visual_people || [];
+  const stale = item.stale_identifications || [];
+  if (stale.length) {
+    const review = document.createElement('div');
+    review.className = 'mb-3 rounded-lg border border-amber-700 bg-amber-950/30 p-3 text-sm text-amber-100';
+    const heading = document.createElement('strong');
+    heading.textContent = 'Asignaciones de una ficha anterior: revisalas';
+    review.appendChild(heading);
+    const list = document.createElement('ul');
+    list.className = 'mt-2 list-inside list-disc space-y-1';
+    stale.forEach(previous => {
+      const entry = document.createElement('li');
+      const description = previous.description || 'Observación sin descripción';
+      const time = `${Math.floor(previous.at_seconds / 60)}:${String(Math.floor(previous.at_seconds % 60)).padStart(2, '0')}`;
+      entry.textContent = `${previous.name}: ${description} (${time})`;
+      list.appendChild(entry);
+    });
+    review.appendChild(list);
+    visualPeople.appendChild(review);
+  }
   if (!observations.length) {
-    visualPeople.textContent = 'No se detectaron personas en los fotogramas analizados.';
+    const empty = document.createElement('p');
+    empty.textContent = 'No se detectaron personas en los fotogramas analizados.';
+    visualPeople.appendChild(empty);
     return;
   }
   identityHelp.textContent = item.can_edit_people
