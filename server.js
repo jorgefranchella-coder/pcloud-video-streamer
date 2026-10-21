@@ -239,13 +239,17 @@ app.get('/api/metadata/evidence', async (req, res) => {
     return res.status(400).json({ error: 'Invalid evidence request' });
   }
   const row = metadata.getByPath.get(relativePath);
-  if (!row || row.visual_status !== 'done' || row.visual_revision !== revision || row.visual_fingerprint !== row.fingerprint) {
-    return res.status(404).json({ error: 'Evidence not found' });
+  if (!row) return res.status(404).json({ error: 'Evidence not found' });
+  let currentEvidence = false;
+  if (row.visual_revision === revision && row.visual_fingerprint === row.fingerprint) {
+    try { currentEvidence = JSON.parse(row.visual_evidence_json || '[]').some(item => item.at_seconds === atSeconds); }
+    catch { currentEvidence = false; }
   }
-  let evidence;
-  try { evidence = JSON.parse(row.visual_evidence_json || '[]'); }
-  catch { evidence = []; }
-  if (!evidence.some(item => item.at_seconds === atSeconds)) return res.status(404).json({ error: 'Evidence not found' });
+  const staleEvidence = !currentEvidence && Boolean(metadata.db.prepare(`SELECT 1 FROM video_person_observations
+    WHERE video_id = ? AND analysis_revision = ? AND at_seconds = ? AND reviewed_at IS NULL
+      AND analysis_revision != COALESCE(?, '') LIMIT 1`)
+    .get(row.id, revision, atSeconds, row.visual_revision));
+  if (!currentEvidence && !staleEvidence) return res.status(404).json({ error: 'Evidence not found' });
   const imagePath = path.join(DATA_DIR, 'evidence', String(row.id), revision, `${atSeconds}.jpg`);
   try {
     const stat = await fs.promises.stat(imagePath);

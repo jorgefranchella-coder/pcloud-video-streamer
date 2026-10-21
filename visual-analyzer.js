@@ -134,11 +134,11 @@ async function persistEvidence(videoId, revision, frames, result) {
   }
 }
 
-async function removeOldEvidence(videoId, keepRevision) {
+async function removeOldEvidence(videoId, keepRevisions) {
   const parent = path.join(DATA_DIR, 'evidence', String(videoId));
   try {
     const entries = await fs.promises.readdir(parent, { withFileTypes: true });
-    await Promise.all(entries.filter(entry => entry.isDirectory() && entry.name !== keepRevision)
+    await Promise.all(entries.filter(entry => entry.isDirectory() && !keepRevisions.has(entry.name))
       .map(entry => fs.promises.rm(path.join(parent, entry.name), { recursive: true, force: true })));
   } catch (error) {
     if (error.code !== 'ENOENT') console.error(`Evidence cleanup failed for video ${videoId}: ${error.message}`);
@@ -261,7 +261,9 @@ async function analyzeVideo(row, apiKey) {
       if (!updated.changes) throw new Error('Video changed in the index during analysis');
     });
     persistResult();
-    await removeOldEvidence(row.id, revision);
+    const pendingRevisions = db.prepare(`SELECT DISTINCT analysis_revision FROM video_person_observations
+      WHERE video_id = ? AND reviewed_at IS NULL`).all(row.id).map(item => item.analysis_revision);
+    await removeOldEvidence(row.id, new Set([revision, ...pendingRevisions]));
     setWorkerActivity('visual-analyzer', { phase: null, result: `Ficha visual guardada para ${row.relative_path}` });
     console.log(JSON.stringify({ video_id: row.id, frames: frames.length, model: MODEL, usage }));
   } catch (error) {

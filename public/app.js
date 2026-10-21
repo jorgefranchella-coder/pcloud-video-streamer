@@ -949,6 +949,7 @@ function renderIdentityAssignments(item) {
       const summary = document.createElement('p');
       summary.textContent = `${previous.name}: ${description} (${time})`;
       entry.appendChild(summary);
+      appendStaleEvidenceThumbnail(entry, item, previous);
       if (item.can_edit_people) {
         const dismiss = document.createElement('button');
         dismiss.type = 'button';
@@ -1147,6 +1148,29 @@ function appendEvidenceThumbnail(container, item, atSeconds, description) {
     image.classList.toggle('max-w-full', expanded);
     image.classList.toggle('object-contain', true);
     button.setAttribute('aria-label', `${expanded ? 'Reducir' : 'Ampliar'} fotograma de evidencia: ${description}`);
+  });
+  container.appendChild(button);
+}
+
+function appendStaleEvidenceThumbnail(container, item, previous) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'mt-2 rounded border border-gray-700 focus:outline-none focus:ring-2 focus:ring-amber-400';
+  button.setAttribute('aria-label', `Ampliar fotograma anterior de ${previous.name}`);
+  const image = document.createElement('img');
+  image.className = 'h-20 w-32 rounded bg-black object-contain';
+  image.loading = 'lazy';
+  image.alt = `Fotograma anterior en el segundo ${previous.at_seconds}: ${previous.description}`;
+  const params = new URLSearchParams({ path: item.relative_path,
+    revision: previous.analysis_revision, at_seconds: String(previous.at_seconds) });
+  image.src = `${API_BASE}/api/metadata/evidence?${params}`;
+  image.addEventListener('error', () => button.remove(), { once: true });
+  button.appendChild(image);
+  button.addEventListener('click', () => {
+    const expanded = image.classList.toggle('max-h-80');
+    image.classList.toggle('h-20', !expanded);
+    image.classList.toggle('w-32', !expanded);
+    image.classList.toggle('max-w-full', expanded);
   });
   container.appendChild(button);
 }

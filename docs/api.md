@@ -20,7 +20,7 @@ Errores comunes de edición: `503` si no se configuró el token, `401` si no coi
 | `GET /api/list` | `path` opcional, raíz por defecto; lista carpetas y extensiones reconocidas |
 | `GET /api/stream` | `path` obligatorio; entrega archivo, acepta rango simple |
 | `GET /api/metadata` | `path` obligatorio; ficha del índice |
-| `GET /api/metadata/evidence` | `path`, `revision`, `at_seconds`; JPEG de evidencia de la revisión activa |
+| `GET /api/metadata/evidence` | `path`, `revision`, `at_seconds`; JPEG de evidencia activa o de una identidad anterior pendiente |
 | `GET /api/index/status` | Conteos, último recorrido y configuración efectiva no secreta registrada por cada trabajador |
 | `GET /api/search` | `q`, `from`, `to`, `person_id`, `folder`, `limit`, `offset` |
 | `GET /api/people` | Catálogo de nombres y cantidades |
@@ -70,7 +70,7 @@ La implementación acepta un rango simple `bytes=inicio-fin`, `bytes=inicio-` o 
 
 `POST /api/metadata/person/review-stale` recibe `{ "path": "...", "analysis_revision": "...", "observation_index": 0 }`. Cierra la revisión pendiente sin crear una asignación en la ficha actual y registra `dismissed` en `identity_history`. Requiere autorización de edición; devuelve `404` si la identificación ya no está pendiente.
 
-`visual_evidence` contiene los segundos de los fotogramas persistidos para respaldar personas, eventos o pistas de fecha. `GET /api/metadata/evidence?path=...&revision=...&at_seconds=...` devuelve un JPEG solo si la revisión sigue vigente y el segundo está registrado en esa ficha. La ruta requiere la misma sesión de acceso que la ficha; una revisión anterior o evidencia ausente devuelve `404`.
+`visual_evidence` contiene los segundos de los fotogramas persistidos para respaldar personas, eventos o pistas de fecha. `GET /api/metadata/evidence?path=...&revision=...&at_seconds=...` devuelve un JPEG de la revisión activa o de una revisión anterior que todavía tenga una identificación pendiente; las revisiones anteriores solo se sirven para los segundos guardados en esas observaciones. La ruta requiere la misma sesión de acceso que la ficha; evidencia inexistente o ya revisada devuelve `404`.
 
 Campos principales:
 
