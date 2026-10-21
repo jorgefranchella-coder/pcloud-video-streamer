@@ -116,6 +116,9 @@ async function scanDirectory(relativeDir, scanId, counters) {
 }
 
 async function runScanLocked() {
+  db.prepare(`UPDATE scans SET status = 'interrupted', completed_at = CURRENT_TIMESTAMP,
+      error = COALESCE(error, 'El proceso anterior terminó antes de completar el recorrido')
+    WHERE status = 'running'`).run();
   const rootStat = await fs.promises.stat(VIDEO_ROOT);
   if (!rootStat.isDirectory()) throw new Error(`VIDEO_ROOT is not a directory: ${VIDEO_ROOT}`);
   const scan = db.prepare("INSERT INTO scans (status) VALUES ('running')").run();

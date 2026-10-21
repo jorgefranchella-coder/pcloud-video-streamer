@@ -77,7 +77,7 @@ Cada análisis visual recibe `visual_revision`; las asignaciones se ligan a esa 
 |---|---|
 | Video técnico | `pending`, `done`, `failed`, `missing` |
 | Video visual | Nulo se interpreta como pendiente; `pending`, `running`, `done`, `failed` |
-| Recorrido | `running`, `done`, `failed`; existe un registro histórico `interrupted`, pero el indexador actual no lo genera al recibir señales |
+| Recorrido | `running`, `done`, `failed`, `interrupted`; al tomar el bloqueo, el siguiente indexador marca como interrumpidos los recorridos que quedaron `running` |
 
 `process_locks` serializa instancias del indexador entre sí y del analizador entre sí. Usa PID y nombre de host para identificar al propietario y recuperar registros abandonados en el mismo servidor. La recuperación automática presupone que los procesos usan la misma base SQLite local y el mismo host; no es un coordinador distribuido para bases compartidas entre servidores.
 
