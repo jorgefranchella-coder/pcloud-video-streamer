@@ -294,7 +294,9 @@ app.get('/api/search', (req, res) => {
   if (!Number.isSafeInteger(offset) || offset < 0 || offset > 1000000) {
     return res.status(400).json({ error: 'offset must be an integer between 0 and 1000000' });
   }
-  res.json({ items: metadata.search({ query, from, to, personId, folder, limit, offset }), limit, offset });
+  const matches = metadata.search({ query, from, to, personId, folder, limit: limit + 1, offset });
+  const hasMore = matches.length > limit;
+  res.json({ items: matches.slice(0, limit), limit, offset, has_more: hasMore });
 });
 
 app.get('/api/metadata', (req, res) => {

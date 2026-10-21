@@ -153,7 +153,7 @@ curl -fsS --get http://127.0.0.1:3001/api/search \
 | `limit` | Por defecto 50, entero entre 1 y 100 |
 | `offset` | Por defecto 0, entero entre 0 y 1.000.000 |
 
-Respuesta `{ "items": [...], "limit": 50, "offset": 0 }`. Cada item incluye ID, ruta, fecha/fuente, estado técnico, título, resumen visual y, si `q` no está vacío, un snippet FTS con las coincidencias delimitadas por `⟦` y `⟧`. `match_at_seconds` es el segundo del evento cuya descripción comparte más términos con la consulta; es `null` si ningún evento coincide. La interfaz usa ese segundo al abrir el resultado. Con consulta, el orden prioriza relevancia FTS (título y resumen tienen más peso); sin consulta, ordena por fecha descendente con fechas desconocidas al final y luego por ruta. No devuelve el puntaje de relevancia.
+Respuesta `{ "items": [...], "limit": 50, "offset": 0, "has_more": false }`. `has_more` indica si existe al menos un elemento adicional para paginar. Cada item incluye ID, ruta, fecha/fuente, estado técnico, título, resumen visual y, si `q` no está vacío, un snippet FTS con las coincidencias delimitadas por `⟦` y `⟧`. `match_at_seconds` es el segundo del evento cuya descripción comparte más términos con la consulta; es `null` si ningún evento coincide. La interfaz usa ese segundo al abrir el resultado. Con consulta, el orden prioriza relevancia FTS (título y resumen tienen más peso); sin consulta, ordena por fecha descendente con fechas desconocidas al final y luego por ruta. No devuelve el puntaje de relevancia.
 
 ## Personas
 

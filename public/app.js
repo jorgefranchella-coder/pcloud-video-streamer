@@ -25,6 +25,7 @@ const playerContainer = document.getElementById('playerContainer');
 const sidebar = document.getElementById('sidebar');
 const searchInput = document.getElementById('searchInput');
 const mobileSearchInput = document.getElementById('mobileSearchInput');
+const searchStatus = document.getElementById('searchStatus');
 const searchFrom = document.getElementById('searchFrom');
 const searchTo = document.getElementById('searchTo');
 const searchWithinFolder = document.getElementById('searchWithinFolder');
@@ -397,18 +398,23 @@ async function searchVideos(query, offset, requestId, folder = isScopedFolderSea
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
     if (requestId !== searchRequestId) return;
-    renderSearchResults(data.items, folderTree, query, offset, requestId, folder);
-    renderSearchResults(data.items, mobileFolderTree, query, offset, requestId, folder);
+    renderSearchResults(data.items, folderTree, query, offset, requestId, folder, data.has_more);
+    renderSearchResults(data.items, mobileFolderTree, query, offset, requestId, folder, data.has_more);
+    const loaded = offset + data.items.length;
+    searchStatus.textContent = loaded === 0
+      ? 'No se encontraron videos.'
+      : `${loaded} ${loaded === 1 ? 'video cargado' : 'videos cargados'}${data.has_more ? '. Hay más resultados disponibles.' : '.'}`;
     breadcrumbs.classList.add('hidden');
   } catch (error) {
     if (requestId === searchRequestId) {
       folderTree.textContent = `Error al buscar: ${error.message}`;
       mobileFolderTree.textContent = `Error al buscar: ${error.message}`;
+      searchStatus.textContent = `No se pudo completar la búsqueda: ${error.message}`;
     }
   }
 }
 
-function renderSearchResults(items, container, query, offset, requestId, folder) {
+function renderSearchResults(items, container, query, offset, requestId, folder, hasMore) {
   if (offset === 0) container.replaceChildren();
   container.querySelector('.search-more')?.remove();
   if (!items.length && offset === 0) {
@@ -438,7 +444,7 @@ function renderSearchResults(items, container, query, offset, requestId, folder)
     li.appendChild(button);
     list.appendChild(li);
   }
-  if (items.length === SEARCH_PAGE_SIZE) {
+  if (hasMore) {
     const more = document.createElement('li');
     more.className = 'search-more';
     const button = document.createElement('button');
@@ -490,6 +496,7 @@ function setupVideoEvents() {
 
 // Load directory tree
 async function loadTree(path) {
+  searchStatus.textContent = '';
   currentPath = path;
   setSearchFolderPath(path);
   currentPathDisplay.textContent = path === '' ? '/' : `/${path}`;
@@ -510,6 +517,7 @@ async function loadTree(path) {
     console.error('Failed to load tree:', err);
     folderTree.textContent = `Error: ${err.message}`;
     mobileFolderTree.textContent = `Error: ${err.message}`;
+    searchStatus.textContent = `No se pudo cargar la biblioteca: ${err.message}`;
   }
 }
 
