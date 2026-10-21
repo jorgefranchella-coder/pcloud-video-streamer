@@ -65,6 +65,7 @@ Archivo: `DATA_DIR/videos.sqlite`. Se habilitan WAL, claves foráneas y espera d
 | `scans` | ID, inicio, fin, estado, cantidad vista y error del recorrido |
 | `process_locks` | Bloqueo de etapa con token, PID, host y adquisición |
 | `worker_runs` | Último estado de ejecución, heartbeat, archivo/fase actual y resultado/error |
+| `worker_run_history` | Historial acotado a 200 ejecuciones recientes por etapa |
 | `worker_configuration` | Configuración efectiva no secreta registrada por cada etapa |
 | `people` | ID, nombre único con colación SQLite `NOCASE`, creación |
 | `video_person_observations` | Clave `(video_id, analysis_revision, observation_index)`, descripción/segundo observados, persona, confirmación y fecha opcional de revisión; conserva identidades anteriores sin asignarlas a otra ficha |

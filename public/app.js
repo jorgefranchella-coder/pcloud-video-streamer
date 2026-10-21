@@ -186,6 +186,23 @@ function renderProcessProgress(status) {
   } else if (count(visual.running)) {
     visualProgressDetail.textContent += ' · Hay fichas running, pero no se confirma un proceso visual activo.';
   }
+  const history = status.worker_history || {};
+  const describeLastRun = run => {
+    if (!run) return '';
+    const timestamp = run.finished_at || run.started_at;
+    const date = timestamp ? new Date(`${timestamp.replace(' ', 'T')}Z`) : null;
+    const time = date && !Number.isNaN(date.getTime())
+      ? date.toLocaleString('es-AR', { dateStyle: 'short', timeStyle: 'short' }) : '';
+    const state = run.status === 'done' ? 'completado' : run.status === 'failed' ? 'falló' : 'interrumpido';
+    const detail = (run.last_error || run.last_result || '').slice(0, 140);
+    return `Último lote ${state}${time ? ` · ${time}` : ''}${detail ? ` · ${detail}` : ''}`;
+  };
+  if (!activity.indexer?.active && history.indexer?.[0]) {
+    technicalProgressDetail.textContent += ` · ${describeLastRun(history.indexer[0])}`;
+  }
+  if (!visualWorker?.active && history['visual-analyzer']?.[0]) {
+    visualProgressDetail.textContent += ` · ${describeLastRun(history['visual-analyzer'][0])}`;
+  }
   const settings = [];
   if (configured.technical) {
     const effective = configured.technical;

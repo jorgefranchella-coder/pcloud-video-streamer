@@ -36,7 +36,7 @@ El proyecto no carga archivos `.env` automáticamente. Para una ejecución manua
 
 Validación al iniciar: `PROBE_TIMEOUT_MS` debe estar entre 1.000 y 600.000; `MAX_PROBES` entre 0 y 1.000.000 (0 significa sin límite); `MAX_VISUAL` entre 1 y 100; `MAX_VISUAL_ATTEMPTS` entre 1 y 20; `MAX_VISUAL_REQUESTS_PER_DAY` entre 0 y 5.000 (0 significa sin límite); `VISUAL_VIDEO_ID`, si se define, debe ser un entero positivo; los flags `RETRY_*` aceptan solo `0` o `1`. Un valor inválido detiene ese trabajador con un error explícito. Los errores de autenticación y las respuestas 4xx no se reintentan automáticamente; 429, 5xx y fallos transitorios esperan antes del próximo intento, con un máximo automático por versión del video.
 
-La unidad visual del repositorio declara `MAX_VISUAL=5` y `RETRY_VISUAL_FAILED=1`. El archivo de entorno de systemd puede sobrescribir esas variables. Cada trabajador registra en SQLite los límites/modelo no secretos usados al arrancar. La interfaz muestra la última configuración registrada por cada etapa; no lee ni revela las claves del proveedor.
+La unidad visual del repositorio declara `MAX_VISUAL=5` y `RETRY_VISUAL_FAILED=1`. El archivo de entorno de systemd puede sobrescribir esas variables. Cada trabajador registra en SQLite los límites/modelo no secretos usados al arrancar. La interfaz muestra la última configuración registrada por cada etapa; no lee ni revela las claves del proveedor. También muestra el último lote y conserva hasta 200 ejecuciones recientes de cada etapa.
 
 Los límites de cuota, precios y disponibilidad de los proveedores no están codificados como garantías del proyecto. Consultarlos en la cuenta del proveedor antes de ampliar el procesamiento. No hay control de presupuesto propio.
 

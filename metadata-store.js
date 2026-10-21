@@ -77,31 +77,61 @@ db.exec(`CREATE TABLE IF NOT EXISTS visual_daily_requests (
   utc_day TEXT PRIMARY KEY,
   request_count INTEGER NOT NULL DEFAULT 0
 )`);
+db.exec(`CREATE TABLE IF NOT EXISTS worker_run_history (
+  id INTEGER PRIMARY KEY,
+  worker TEXT NOT NULL,
+  owner_pid INTEGER NOT NULL,
+  owner_host TEXT NOT NULL,
+  status TEXT NOT NULL,
+  started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  heartbeat_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  finished_at TEXT,
+  last_result TEXT,
+  last_error TEXT
+);
+CREATE INDEX IF NOT EXISTS worker_run_history_worker_idx ON worker_run_history(worker, id DESC)`);
 
 function startWorkerRun(worker) {
-  db.prepare(`INSERT INTO worker_runs
+  const start = db.transaction(() => {
+    db.prepare(`INSERT INTO worker_runs
       (worker, status, owner_pid, owner_host, started_at, heartbeat_at, current_video_id, current_path, phase, last_error, finished_at)
     VALUES (?, 'running', ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL, NULL, 'starting', NULL, NULL)
     ON CONFLICT(worker) DO UPDATE SET status = 'running', owner_pid = excluded.owner_pid,
       owner_host = excluded.owner_host, started_at = CURRENT_TIMESTAMP, heartbeat_at = CURRENT_TIMESTAMP,
       current_video_id = NULL, current_path = NULL, phase = 'starting', last_error = NULL, finished_at = NULL`)
-    .run(worker, process.pid, os.hostname());
+      .run(worker, process.pid, os.hostname());
+    db.prepare(`INSERT INTO worker_run_history (worker, owner_pid, owner_host, status)
+      VALUES (?, ?, ?, 'running')`).run(worker, process.pid, os.hostname());
+    db.prepare(`DELETE FROM worker_run_history WHERE worker = ? AND id NOT IN
+      (SELECT id FROM worker_run_history WHERE worker = ? ORDER BY id DESC LIMIT 200)`).run(worker, worker);
+  });
+  start.immediate();
 }
 
 function touchWorkerRun(worker) {
   db.prepare("UPDATE worker_runs SET heartbeat_at = CURRENT_TIMESTAMP WHERE worker = ? AND status = 'running'").run(worker);
+  db.prepare(`UPDATE worker_run_history SET heartbeat_at = CURRENT_TIMESTAMP WHERE id =
+    (SELECT MAX(id) FROM worker_run_history WHERE worker = ? AND status = 'running')`).run(worker);
 }
 
 function setWorkerActivity(worker, { phase = null, videoId = null, path = null, result = null, error = null } = {}) {
   db.prepare(`UPDATE worker_runs SET heartbeat_at = CURRENT_TIMESTAMP, phase = ?, current_video_id = ?,
       current_path = ?, last_result = COALESCE(?, last_result), last_error = ?
     WHERE worker = ? AND status = 'running'`).run(phase, videoId, path, result, error, worker);
+  db.prepare(`UPDATE worker_run_history SET heartbeat_at = CURRENT_TIMESTAMP,
+      last_result = COALESCE(?, last_result), last_error = ? WHERE id =
+      (SELECT MAX(id) FROM worker_run_history WHERE worker = ? AND status = 'running')`)
+    .run(result, error, worker);
 }
 
 function finishWorkerRun(worker, status, error = null) {
   db.prepare(`UPDATE worker_runs SET status = ?, heartbeat_at = CURRENT_TIMESTAMP,
       phase = NULL, current_video_id = NULL, current_path = NULL, last_error = ?, finished_at = CURRENT_TIMESTAMP
     WHERE worker = ?`).run(status, error, worker);
+  db.prepare(`UPDATE worker_run_history SET status = ?, heartbeat_at = CURRENT_TIMESTAMP,
+      finished_at = CURRENT_TIMESTAMP, last_error = COALESCE(?, last_error) WHERE id =
+      (SELECT MAX(id) FROM worker_run_history WHERE worker = ? AND status = 'running')`)
+    .run(status, error, worker);
 }
 
 function withJobLock(name, operation) {
@@ -320,6 +350,10 @@ function status() {
   const utcDay = new Date().toISOString().slice(0, 10);
   const dailyRequests = db.prepare('SELECT request_count FROM visual_daily_requests WHERE utc_day = ?').get(utcDay)?.request_count || 0;
   const dailyLimit = workerConfiguration.visual?.max_visual_requests_per_day || 0;
+  const workerHistory = Object.fromEntries(['indexer', 'visual-analyzer'].map(worker => [worker,
+    db.prepare(`SELECT id, status, started_at, heartbeat_at, finished_at, last_result, last_error
+      FROM worker_run_history WHERE worker = ? ORDER BY id DESC LIMIT 10`).all(worker)
+  ]));
   const workerActivity = Object.fromEntries(db.prepare('SELECT * FROM worker_runs').all().map(row => {
     let alive = null;
     if (row.owner_host === os.hostname()) {
@@ -346,6 +380,7 @@ function status() {
     },
     last_scan: scan || null,
     worker_configuration: workerConfiguration,
+    worker_history: workerHistory,
     worker_activity: workerActivity
   };
 }
