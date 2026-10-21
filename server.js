@@ -198,12 +198,34 @@ async function getVisualTimerStatus() {
   return value;
 }
 
+async function getPipelineTimerStatus() {
+  try {
+    const { stdout } = await execFileAsync('systemctl', [
+      'show', 'pcloud-video-pipeline.timer',
+      '--property=LoadState,ActiveState,UnitFileState,NextElapseUSecRealtime,LastTriggerUSec',
+      '--no-pager'
+    ], { timeout: 2000, maxBuffer: 10000 });
+    const fields = Object.fromEntries(stdout.trim().split('\n').map(line => {
+      const separator = line.indexOf('=');
+      return separator < 0 ? [line, ''] : [line.slice(0, separator), line.slice(separator + 1)];
+    }));
+    return {
+      available: fields.LoadState === 'loaded', load_state: fields.LoadState || 'unknown',
+      active: fields.ActiveState === 'active', enabled: fields.UnitFileState === 'enabled',
+      next_run: fields.NextElapseUSecRealtime || null, last_run: fields.LastTriggerUSec || null
+    };
+  } catch {
+    return { available: false, load_state: 'unknown', active: false, enabled: false, next_run: null, last_run: null };
+  }
+}
+
 function asyncRoute(handler) {
   return (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 }
 
 app.get('/api/index/status', asyncRoute(async (_req, res) => {
-  res.json({ ...metadata.status(), visual_timer: await getVisualTimerStatus() });
+  const [visualTimer, pipelineTimer] = await Promise.all([getVisualTimerStatus(), getPipelineTimerStatus()]);
+  res.json({ ...metadata.status(), visual_timer: visualTimer, pipeline_timer: pipelineTimer });
 }));
 
 app.get('/api/people', (_req, res) => {

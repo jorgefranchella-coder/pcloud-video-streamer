@@ -221,6 +221,7 @@ const existingColumns = new Set(db.prepare('PRAGMA table_info(videos)').all().ma
 for (const [name, definition] of Object.entries(visualColumns)) {
   if (!existingColumns.has(name)) db.exec(`ALTER TABLE videos ADD COLUMN ${name} ${definition}`);
 }
+db.exec('CREATE INDEX IF NOT EXISTS videos_visual_analyzed_at_idx ON videos(visual_analyzed_at)');
 
 db.exec(`
   CREATE VIRTUAL TABLE IF NOT EXISTS video_fts USING fts5(
@@ -451,6 +452,9 @@ function status() {
   const utcDay = new Date().toISOString().slice(0, 10);
   const dailyRequests = db.prepare('SELECT request_count FROM visual_daily_requests WHERE utc_day = ?').get(utcDay)?.request_count || 0;
   const dailyLimit = workerConfiguration.visual?.max_visual_requests_per_day || 0;
+  const monthlyLimit = workerConfiguration.visual?.max_visual_cost_per_month_usd || 0;
+  const utcMonth = `${utcDay.slice(0, 7)}-01`;
+  const monthlyCost = getVisualMonthlySpend();
   const providerControl = getVisualProviderControl();
   const workerHistory = Object.fromEntries(['indexer', 'visual-analyzer'].map(worker => [worker,
     db.prepare(`SELECT id, status, started_at, heartbeat_at, finished_at, last_result, last_error
@@ -480,6 +484,10 @@ function status() {
       utc_day: utcDay, requests: dailyRequests, limit: dailyLimit,
       remaining: dailyLimit ? Math.max(0, dailyLimit - dailyRequests) : null
     },
+    visual_monthly_budget: {
+      utc_month: utcMonth.slice(0, 7), spent_usd: Number(monthlyCost.toFixed(6)),
+      limit_usd: monthlyLimit, remaining_usd: monthlyLimit ? Number(Math.max(0, monthlyLimit - monthlyCost).toFixed(6)) : null
+    },
     visual_provider_control: providerControl ? {
       paused: true, error_class: providerControl.error_class, reason: providerControl.reason,
       paused_at: providerControl.paused_at, paused_until: providerControl.paused_until
@@ -501,6 +509,18 @@ function reserveVisualDailyRequest(limit) {
     return true;
   });
   return reserve.immediate();
+}
+
+function getVisualMonthlySpend() {
+  const utcMonth = `${new Date().toISOString().slice(0, 7)}-01`;
+  return db.prepare(`SELECT visual_usage_json FROM videos
+    WHERE visual_analyzed_at >= ? AND visual_usage_json IS NOT NULL`).all(utcMonth)
+    .reduce((sum, row) => {
+      try {
+        const cost = Number(JSON.parse(row.visual_usage_json)?.cost);
+        return Number.isFinite(cost) && cost >= 0 ? sum + cost : sum;
+      } catch { return sum; }
+    }, 0);
 }
 
 function getVisualProviderControl() {
@@ -889,5 +909,5 @@ module.exports = {
   dismissStaleIdentification,
   setVideoPerson, renamePerson, mergePeople, undoPeopleMerge, listPersonMerges,
   withJobLock, setWorkerConfiguration, setWorkerActivity, reserveVisualDailyRequest,
-  getVisualProviderControl, setVisualProviderControl, clearVisualProviderControl
+  getVisualProviderControl, setVisualProviderControl, clearVisualProviderControl, getVisualMonthlySpend
 };

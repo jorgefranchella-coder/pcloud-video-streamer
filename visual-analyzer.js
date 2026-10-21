@@ -5,7 +5,8 @@ const { execFile } = require('child_process');
 const { promisify } = require('util');
 const {
   db, buildVisualSearchText, withJobLock, setWorkerConfiguration, setWorkerActivity,
-  reserveVisualDailyRequest, getVisualProviderControl, setVisualProviderControl, clearVisualProviderControl
+  reserveVisualDailyRequest, getVisualProviderControl, setVisualProviderControl,
+  clearVisualProviderControl, getVisualMonthlySpend
 } = require('./metadata-store');
 const { visualConfiguration } = require('./config');
 
@@ -25,6 +26,7 @@ const PROMPT_VERSION = 'visual-v2';
 const MAX_VISUAL = CONFIG.max_visual;
 const MAX_VISUAL_ATTEMPTS = CONFIG.max_visual_attempts;
 const MAX_VISUAL_REQUESTS_PER_DAY = CONFIG.max_visual_requests_per_day;
+const MAX_VISUAL_COST_PER_MONTH_USD = CONFIG.max_visual_cost_per_month_usd;
 const RETRY_FAILED = CONFIG.retry_visual_failed;
 const TARGET_ID = CONFIG.visual_video_id;
 
@@ -388,6 +390,15 @@ async function runLocked() {
     }
   }
   const utcDay = new Date().toISOString().slice(0, 10);
+  const monthlySpend = getVisualMonthlySpend();
+  if (MAX_VISUAL_COST_PER_MONTH_USD > 0 && monthlySpend >= MAX_VISUAL_COST_PER_MONTH_USD) {
+    setWorkerActivity('visual-analyzer', {
+      phase: 'presupuesto mensual agotado',
+      result: `Costo reportado por el proveedor: USD ${monthlySpend.toFixed(4)} / ${MAX_VISUAL_COST_PER_MONTH_USD.toFixed(4)} este mes`
+    });
+    console.log(`Visual monthly cost budget exhausted: ${monthlySpend}/${MAX_VISUAL_COST_PER_MONTH_USD} USD`);
+    return;
+  }
   const usedToday = db.prepare('SELECT request_count FROM visual_daily_requests WHERE utc_day = ?').get(utcDay)?.request_count || 0;
   const dailyRemaining = MAX_VISUAL_REQUESTS_PER_DAY
     ? Math.max(0, MAX_VISUAL_REQUESTS_PER_DAY - usedToday)
@@ -406,10 +417,20 @@ async function runLocked() {
             AND visual_next_attempt_at <= CURRENT_TIMESTAMP AND visual_attempts < ?))
         ORDER BY CASE WHEN visual_status = 'pending' OR visual_status IS NULL THEN 0 ELSE 1 END, id LIMIT ?`)
       .all(RETRY_FAILED ? 1 : 0, MAX_VISUAL_ATTEMPTS, batchLimit);
+  let attempted = 0;
   for (const row of candidates) {
+    const currentSpend = getVisualMonthlySpend();
+    if (MAX_VISUAL_COST_PER_MONTH_USD > 0 && currentSpend >= MAX_VISUAL_COST_PER_MONTH_USD) {
+      setWorkerActivity('visual-analyzer', {
+        phase: 'presupuesto mensual agotado',
+        result: `Costo reportado por el proveedor: USD ${currentSpend.toFixed(4)} / ${MAX_VISUAL_COST_PER_MONTH_USD.toFixed(4)} este mes`
+      });
+      break;
+    }
+    attempted++;
     if (!await analyzeVideo(row, apiKey)) break;
   }
-  console.log(`Visual batch: ${candidates.length} video(s) attempted`);
+  console.log(`Visual batch: ${attempted} video(s) attempted`);
 }
 
 function run() {
@@ -417,6 +438,7 @@ function run() {
     setWorkerConfiguration('visual', {
       model: MODEL, max_visual: MAX_VISUAL, max_visual_attempts: MAX_VISUAL_ATTEMPTS,
       max_visual_requests_per_day: MAX_VISUAL_REQUESTS_PER_DAY,
+      max_visual_cost_per_month_usd: MAX_VISUAL_COST_PER_MONTH_USD,
       retry_failed: RETRY_FAILED,
       video_id: Number.isInteger(TARGET_ID) ? TARGET_ID : null
     });

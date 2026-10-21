@@ -32,14 +32,15 @@ El proyecto no carga archivos `.env` automáticamente. Para una ejecución manua
 | `MAX_VISUAL` | `1` | Visual; lote entre 1 y 100; `0` no significa ilimitado |
 | `MAX_VISUAL_ATTEMPTS` | `5` | Visual; intentos automáticos máximos por fingerprint, entre 1 y 20 |
 | `MAX_VISUAL_REQUESTS_PER_DAY` | `0` | Visual; solicitudes iniciadas por día UTC; `0` desactiva el límite |
+| `MAX_VISUAL_COST_PER_MONTH_USD` | `0` | Visual; detiene lotes cuando el costo reportado acumulado llega al umbral; `0` desactiva el umbral |
 | `RETRY_VISUAL_FAILED` | Desactivado | Visual; exactamente `1` incluye fallos transitorios cuyo tiempo de espera ya venció |
 | `VISUAL_VIDEO_ID` | Sin definir | Visual; ID positivo selecciona un solo video técnicamente listo, incluso si ya tiene ficha |
 
-Validación al iniciar: `PROBE_TIMEOUT_MS` debe estar entre 1.000 y 600.000; `MAX_PROBES` entre 0 y 1.000.000 (0 significa sin límite); `MAX_VISUAL` entre 1 y 100; `MAX_VISUAL_ATTEMPTS` entre 1 y 20; `MAX_VISUAL_REQUESTS_PER_DAY` entre 0 y 5.000 (0 significa sin límite); `VISUAL_VIDEO_ID`, si se define, debe ser un entero positivo; los flags `RETRY_*` aceptan solo `0` o `1`. Un valor inválido detiene ese trabajador con un error explícito. Los errores de autenticación y las respuestas 4xx no se reintentan automáticamente; 429, 5xx y fallos transitorios esperan antes del próximo intento, con un máximo automático por versión del video.
+Validación al iniciar: `PROBE_TIMEOUT_MS` debe estar entre 1.000 y 600.000; `MAX_PROBES` entre 0 y 1.000.000 (0 significa sin límite); `MAX_VISUAL` entre 1 y 100; `MAX_VISUAL_ATTEMPTS` entre 1 y 20; `MAX_VISUAL_REQUESTS_PER_DAY` entre 0 y 5.000 (0 significa sin límite); `MAX_VISUAL_COST_PER_MONTH_USD` entre 0 y 100.000 con hasta seis decimales; `VISUAL_VIDEO_ID`, si se define, debe ser un entero positivo; los flags `RETRY_*` aceptan solo `0` o `1`. Un valor inválido detiene ese trabajador con un error explícito. Los errores de autenticación y las respuestas 4xx no se reintentan automáticamente; 429, 5xx y fallos transitorios esperan antes del próximo intento, con un máximo automático por versión del video.
 
 La unidad visual del repositorio declara `MAX_VISUAL=5` y `RETRY_VISUAL_FAILED=1`. El archivo de entorno de systemd puede sobrescribir esas variables. Cada trabajador registra en SQLite los límites/modelo no secretos usados al arrancar. La interfaz muestra la última configuración registrada por cada etapa; no lee ni revela las claves del proveedor. También muestra el último lote y conserva hasta 200 ejecuciones recientes de cada etapa.
 
-Los límites de cuota, precios y disponibilidad de los proveedores no están codificados como garantías del proyecto. Consultarlos en la cuenta del proveedor antes de ampliar el procesamiento. No hay control de presupuesto propio.
+Los límites de cuota, precios y disponibilidad de los proveedores no están codificados como garantías del proyecto. Consultarlos en la cuenta del proveedor antes de ampliar el procesamiento. El límite mensual usa costos reportados tras respuestas exitosas; no es un tope financiero garantizado y una última solicitud puede excederlo.
 
 ## Desarrollo local
 
@@ -63,7 +64,7 @@ Para un lote visual, suministrar `OPENROUTER_API_KEY` mediante el mecanismo de s
 MAX_VISUAL=1 npm run analyze
 ```
 
-No pasar claves reales en ejemplos compartidos ni incorporarlas al repositorio. Los scripts disponibles son `start`, `dev` (ambos ejecutan el mismo servidor sin recarga automática), `inventory`, `index` y `analyze`.
+No pasar claves reales en ejemplos compartidos ni incorporarlas al repositorio. Los scripts disponibles son `start`, `dev` (ambos ejecutan el mismo servidor sin recarga automática), `inventory`, `index`, `analyze` y `pipeline` (inventario seguido por un lote visual).
 
 ## Montaje con rclone
 
@@ -89,10 +90,11 @@ OPENROUTER_API_KEY=REEMPLAZAR_POR_LA_CLAVE
 OPENROUTER_MODEL=openrouter/free
 MAX_VISUAL=5
 MAX_VISUAL_REQUESTS_PER_DAY=30
+MAX_VISUAL_COST_PER_MONTH_USD=2.00
 RETRY_VISUAL_FAILED=0
 ```
 
-Este ejemplo elige cinco por lote, limita a 30 las solicitudes iniciadas en un día UTC y no reintenta fallidos automáticamente. El contador persiste en SQLite y se muestra en la interfaz; las fichas restantes quedan pendientes para el próximo lote manual después de renovarse el límite. Omitir `VISUAL_VIDEO_ID` para procesar la cola; dejarlo fijado provoca que cada arranque vuelva al mismo video.
+Este ejemplo elige cinco por lote, limita a 30 las solicitudes iniciadas en un día UTC, detiene nuevos lotes al alcanzar USD 2 de costo reportado en el mes y no reintenta fallidos automáticamente. Los contadores persisten en SQLite y se muestran en la interfaz; `MAX_VISUAL_COST_PER_MONTH_USD=0` desactiva el umbral monetario. OpenRouter reporta el costo después de la respuesta, así que una última solicitud puede superar el límite. Omitir `VISUAL_VIDEO_ID` para procesar la cola; dejarlo fijado provoca que cada arranque vuelva al mismo video.
 
 Para editar identidades, crear `/etc/pcloud-video-metadata.env` con `sudoedit`:
 
@@ -118,7 +120,7 @@ Se puede generar un valor con `openssl rand -hex 32`. Son archivos distintos: la
 
 ```bash
 sudo chmod 600 /etc/pcloud-video-visual.env /etc/pcloud-video-metadata.env /etc/pcloud-video-access.env
-sudo cp pcloud-video-streamer.service pcloud-video-indexer.service pcloud-video-indexer.timer pcloud-video-visual.service pcloud-video-visual.timer /etc/systemd/system/
+sudo cp pcloud-video-streamer.service pcloud-video-indexer.service pcloud-video-indexer.timer pcloud-video-visual.service pcloud-video-visual.timer pcloud-video-pipeline.service pcloud-video-pipeline.timer /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now pcloud-video-streamer.service
 sudo systemctl enable --now pcloud-video-indexer.timer
@@ -134,8 +136,9 @@ El temporizador técnico puede activar una ejecución al habilitarlo si ya pasó
 | `pcloud-video-indexer.timer` | `OnBootSec=5min`, después `OnUnitInactiveSec=6h` |
 | `pcloud-video-visual.service` | `oneshot` manual; termina al finalizar el lote |
 | `pcloud-video-visual.timer` | Opcional; primer lote 15 min después del arranque, siguientes una hora después de terminar el lote anterior |
+| `pcloud-video-pipeline.timer` | Opcional; recorre inventario técnico y después ejecuta un lote visual limitado; luego espera 6 h |
 
-El temporizador técnico es relativo, no un calendario de horas fijas. `Persistent=true` aparece en el archivo, pero no debe interpretarse como recuperación garantizada de todas las ejecuciones omitidas de este temporizador relativo. La etapa visual no se inicia automáticamente cuando termina la técnica; el temporizador visual opcional continúa la cola en lotes separados.
+El temporizador técnico es relativo, no un calendario de horas fijas. `Persistent=true` aparece en el archivo, pero no debe interpretarse como recuperación garantizada de todas las ejecuciones omitidas de este temporizador relativo. Con solo el timer técnico, la etapa visual no se inicia al terminar el inventario; se puede habilitar el pipeline optativo para encadenar ambas etapas o mantener el timer visual separado.
 
 Para activar la continuación visual, primero definir `MAX_VISUAL_REQUESTS_PER_DAY` en `/etc/pcloud-video-visual.env` con el máximo diario que se desea permitir. Verificar que la clave, el modelo y el endpoint sean correctos; los cambios de configuración levantan una pausa permanente del proveedor, mientras que errores de cuota/red tienen espera automática. Luego habilitar el timer:
 
@@ -145,6 +148,15 @@ systemctl list-timers pcloud-video-visual.timer
 ```
 
 El timer no se habilita en la instalación inicial. Cada ejecución respeta `MAX_VISUAL`, el límite diario, los reintentos y el bloqueo común. Si se alcanza el límite diario, las fichas siguen pendientes; systemd las intentará en su siguiente intervalo, una vez renovado el contador UTC.
+
+Para encadenar inventario y análisis visual en una sola ejecución, habilitar el timer de pipeline solo después de configurar la clave y los límites de solicitudes/costo en `/etc/pcloud-video-visual.env`:
+
+```bash
+sudo systemctl enable --now pcloud-video-pipeline.timer
+systemctl list-timers pcloud-video-pipeline.timer
+```
+
+El pipeline ejecuta `indexer.js` y luego un lote visual en secuencia, respetando los bloqueos compartidos. Es optativo porque habilitarlo puede consumir cuota del proveedor. No habilitarlo junto con los timers individuales de indexación y análisis si no se desea que varios calendarios procesen la misma cola; los bloqueos impiden duplicar trabajo concurrente, pero no combinan sus frecuencias.
 
 Cambiar código del servidor exige reiniciarlo. Ante `SIGTERM` o `SIGINT`, el servidor deja de aceptar conexiones, permite hasta 25 segundos para terminar las solicitudes activas y luego cierra las conexiones restantes; finalmente cierra SQLite. Los procesos de lote cargan el nuevo código en su próximo arranque. Los archivos estáticos se leen en las peticiones; recargar el navegador. Para cambios de unidades: copiar nuevamente, `daemon-reload` y reiniciar la unidad afectada. Cambiar solo el contenido de un `EnvironmentFile` requiere un nuevo arranque del proceso que lo consume.
 

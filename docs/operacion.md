@@ -88,7 +88,7 @@ Esta ejecución no cambia el estado de la unidad systemd. El analizador visual t
 | Síntoma | Comprobación y acción |
 |---|---|
 | Solo una ficha visual por ejecución | Ver tamaño efectivo del lote y selector `VISUAL_VIDEO_ID`; leer el contador `Visual batch` del registro. No asumir una causa sin revisar configuración |
-| Muchas fichas visuales pendientes | Solo son elegibles las técnicas `done`. El timer visual es opcional y no queda habilitado por defecto; ver Configuración |
+| Muchas fichas visuales pendientes | Solo son elegibles las técnicas `done`. El timer visual y el pipeline técnico+visual son optativos y quedan deshabilitados por defecto; ver Configuración |
 | `401` / `403` del proveedor | El trabajador pausa la etapa y no vuelve a llamar con la misma configuración. Revisar credencial/permisos; cambiar clave, modelo o endpoint y reiniciar el trabajador para reactivar |
 | `429` | El lote se detiene y la ficha recibe una espera exponencial (inicia en cinco minutos, máximo 24 horas). Consultar la cuota; el siguiente arranque solo la toma cuando vence el plazo y `RETRY_VISUAL_FAILED=1` |
 | Pausa de proveedor visible | `/api/index/status` incluye `visual_provider_control`; los fallos de cuota o red esperan hasta el horario indicado, y los errores de configuración requieren cambiar clave/modelo/endpoint |

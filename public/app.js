@@ -176,6 +176,7 @@ function renderProcessProgress(status) {
   const visualDone = count(visual.done);
   const retryWait = status.visual_retry_wait || {};
   const dailyBudget = status.visual_daily_budget || {};
+  const monthlyBudget = status.visual_monthly_budget || {};
   const retryEnabled = status.worker_configuration?.visual?.retry_failed;
   const retryAt = retryWait.next_at ? new Date(`${retryWait.next_at.replace(' ', 'T')}Z`) : null;
   const retryTime = retryAt && !Number.isNaN(retryAt.getTime())
@@ -202,6 +203,7 @@ function renderProcessProgress(status) {
     count(retryWait.ready_count) && !retryEnabled ? `${format(retryWait.ready_count)} reintentos vencidos · activá RETRY_VISUAL_FAILED` : '',
     count(retryWait.count) > count(retryWait.ready_count) ? `${format(count(retryWait.count) - count(retryWait.ready_count))} esperando reintento${retryTime ? ` · próximo ${retryTime}` : ''}` : '',
     count(dailyBudget.limit) ? `Solicitudes del proveedor hoy: ${format(dailyBudget.requests)} / ${format(dailyBudget.limit)} UTC${count(dailyBudget.remaining) === 0 ? ' · límite alcanzado, se renueva a las 00:00 UTC' : ''}` : '',
+    Number(monthlyBudget.limit_usd) > 0 ? `Costo reportado este mes: USD ${Number(monthlyBudget.spent_usd || 0).toFixed(4)} / ${Number(monthlyBudget.limit_usd).toFixed(2)}${Number(monthlyBudget.remaining_usd) <= 0 ? ' · límite alcanzado' : ''}` : '',
     count(technical.pending) ? `${format(technical.pending)} esperando inventario técnico` : ''
   ].filter(Boolean).join(' · ');
 
@@ -235,6 +237,14 @@ function renderProcessProgress(status) {
     visualProgressDetail.textContent += visualTimer.enabled
       ? ' · Timer visual habilitado, esperando próximo disparo'
       : ' · Timer visual instalado pero deshabilitado';
+  }
+  const pipelineTimer = status.pipeline_timer || {};
+  if (pipelineTimer.active) {
+    const next = pipelineTimer.next_run ? ` · próximo ${pipelineTimer.next_run}` : '';
+    visualProgressDetail.textContent += ` · Pipeline técnico + visual automático activo${next}`;
+  } else if (pipelineTimer.enabled) {
+    const next = pipelineTimer.next_run ? ` · próximo ${pipelineTimer.next_run}` : '';
+    visualProgressDetail.textContent += ` · Pipeline automático habilitado${next}`;
   }
   const history = status.worker_history || {};
   const describeLastRun = run => {

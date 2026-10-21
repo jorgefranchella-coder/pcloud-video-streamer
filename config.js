@@ -17,6 +17,18 @@ function booleanSetting(name) {
   throw new Error(`${name} must be 0 or 1`);
 }
 
+function decimalSetting(name, fallback, minimum, maximum) {
+  const raw = process.env[name];
+  if (raw !== undefined && !/^(?:\d+)(?:\.\d{1,6})?$/.test(raw)) {
+    throw new Error(`${name} must be a decimal number between ${minimum} and ${maximum}`);
+  }
+  const value = raw === undefined ? fallback : Number(raw);
+  if (!Number.isFinite(value) || value < minimum || value > maximum) {
+    throw new Error(`${name} must be a decimal number between ${minimum} and ${maximum}`);
+  }
+  return value;
+}
+
 function indexerConfiguration() {
   const mode = process.env.INDEX_MODE;
   if (mode !== undefined && mode !== '' && mode !== 'inventory') {
@@ -42,6 +54,7 @@ function visualConfiguration() {
     max_visual: integerSetting('MAX_VISUAL', 1, 1, 100),
     max_visual_attempts: integerSetting('MAX_VISUAL_ATTEMPTS', 5, 1, 20),
     max_visual_requests_per_day: integerSetting('MAX_VISUAL_REQUESTS_PER_DAY', 0, 0, 5000),
+    max_visual_cost_per_month_usd: decimalSetting('MAX_VISUAL_COST_PER_MONTH_USD', 0, 0, 100000),
     retry_visual_failed: booleanSetting('RETRY_VISUAL_FAILED'),
     visual_video_id: videoId
   };

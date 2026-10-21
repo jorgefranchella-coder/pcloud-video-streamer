@@ -7,6 +7,7 @@
     "start": "node server.js",
     "dev": "node server.js",
     "index": "node indexer.js",
+    "pipeline": "node pipeline.js",
     "inventory": "INDEX_MODE=inventory node indexer.js",
     "analyze": "node visual-analyzer.js",
     "backup": "node scripts/backup-data.js",
