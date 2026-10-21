@@ -777,13 +777,18 @@ function renderPeopleDirectory() {
         merge.className = 'shrink-0 rounded border border-amber-800 px-2 py-1 text-xs text-amber-200 hover:bg-amber-900';
         merge.textContent = 'Combinar';
         merge.setAttribute('aria-label', `Combinar ${person.name} con otra persona`);
+        merge.setAttribute('aria-expanded', 'false');
+        merge.setAttribute('aria-controls', `merge-panel-${person.id}`);
         merge.addEventListener('click', () => {
           const panel = row.querySelector('[data-merge-panel]');
           panel.classList.toggle('hidden');
-          if (!panel.classList.contains('hidden')) panel.querySelector('select').focus();
+          const expanded = !panel.classList.contains('hidden');
+          merge.setAttribute('aria-expanded', String(expanded));
+          if (expanded) panel.querySelector('select').focus();
         });
         row.appendChild(merge);
         const panel = document.createElement('div');
+        panel.id = `merge-panel-${person.id}`;
         panel.dataset.mergePanel = 'true';
         panel.className = 'hidden flex w-full flex-wrap items-center gap-2 border-t border-gray-700 pt-2';
         const targetSelect = document.createElement('select');
@@ -804,7 +809,11 @@ function renderPeopleDirectory() {
         cancelMerge.type = 'button';
         cancelMerge.className = 'rounded border border-gray-600 px-3 py-2 text-sm hover:bg-gray-700';
         cancelMerge.textContent = 'Cancelar';
-        cancelMerge.addEventListener('click', () => panel.classList.add('hidden'));
+        cancelMerge.addEventListener('click', () => {
+          panel.classList.add('hidden');
+          merge.setAttribute('aria-expanded', 'false');
+          merge.focus();
+        });
         panel.append(targetSelect, confirmMerge, cancelMerge);
         row.appendChild(panel);
       }

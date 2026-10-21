@@ -69,11 +69,11 @@
         </div>
       </header>
 
-      <section id="processProgress" class="shrink-0 border-b border-gray-700 bg-gray-800 px-4 py-3" aria-label="Progreso de las fichas" aria-live="polite">
+      <section id="processProgress" class="shrink-0 border-b border-gray-700 bg-gray-800 px-4 py-3" aria-label="Progreso de las fichas">
         <div class="mx-auto max-w-5xl">
           <div class="mb-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
             <h3 class="text-sm font-semibold">Progreso de las fichas</h3>
-            <span id="progressUpdated" class="text-xs text-gray-400">Cargando estado…</span>
+            <span id="progressUpdated" class="text-xs text-gray-400" role="status" aria-live="polite">Cargando estado…</span>
           </div>
           <div class="grid gap-3 sm:grid-cols-2">
             <div>
@@ -98,7 +98,7 @@
             </div>
           </div>
           <p id="effectiveConfiguration" class="mt-2 text-xs text-gray-500">Configuración efectiva: esperando datos</p>
-          <p id="scanProgressStatus" class="mt-2 hidden text-xs text-amber-300"></p>
+          <p id="scanProgressStatus" class="mt-2 hidden text-xs text-amber-300" role="status" aria-live="polite"></p>
         </div>
       </section>
 
@@ -188,13 +188,13 @@
     </aside>
   </div>
 
-  <dialog id="peopleDialog" class="w-[min(32rem,calc(100%-2rem))] rounded-xl border border-gray-700 bg-gray-800 p-0 text-gray-100 shadow-2xl backdrop:bg-black/70">
+  <dialog id="peopleDialog" aria-labelledby="peopleDialogTitle" aria-describedby="peopleDialogDescription" class="w-[min(32rem,calc(100%-2rem))] rounded-xl border border-gray-700 bg-gray-800 p-0 text-gray-100 shadow-2xl backdrop:bg-black/70">
     <div class="flex items-center justify-between border-b border-gray-700 p-4">
       <div>
-        <h2 class="font-semibold">Personas identificadas</h2>
-        <p class="text-xs text-gray-400 mt-1">Elegí un nombre para buscar sus apariciones.</p>
+        <h2 id="peopleDialogTitle" class="font-semibold">Personas identificadas</h2>
+        <p id="peopleDialogDescription" class="text-xs text-gray-400 mt-1">Elegí un nombre para buscar sus apariciones.</p>
       </div>
-      <button id="closePeopleDialog" class="rounded px-2 py-1 text-gray-400 hover:bg-gray-700 hover:text-white" aria-label="Cerrar">✕</button>
+      <button id="closePeopleDialog" type="button" class="rounded px-2 py-1 text-gray-400 hover:bg-gray-700 hover:text-white" aria-label="Cerrar">✕</button>
     </div>
     <div id="peopleDirectory" class="max-h-[60vh] overflow-y-auto p-3"></div>
   </dialog>
