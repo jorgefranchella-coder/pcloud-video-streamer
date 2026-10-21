@@ -487,6 +487,15 @@ app.get('/api/stream', async (req, res) => {
   }
 });
 
+app.use((error, req, res, next) => {
+  if (!req.path.startsWith('/api/')) return next(error);
+  if (res.headersSent) return next(error);
+  if (error.type === 'entity.too.large') return res.status(413).json({ error: 'Request body too large' });
+  if (error.type === 'entity.parse.failed') return res.status(400).json({ error: 'Invalid JSON' });
+  console.error('API request error:', error.message);
+  return res.status(500).json({ error: 'Internal server error' });
+});
+
 function isVideoFile(filename) {
   const videoExtensions = ['.mp4', '.mkv', '.webm', '.mov', '.avi', '.m4v', '.flv', '.wmv', '.mpg', '.mpeg'];
   const ext = path.extname(filename).toLowerCase();
