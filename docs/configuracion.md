@@ -110,7 +110,7 @@ ACCESS_COOKIE_SECURE=1
 
 Generar el token, por ejemplo, con `openssl rand -hex 32`. El servidor pide el token una vez y entrega una sesión de 12 horas en una cookie `HttpOnly`; no se guarda en el navegador ni se agrega a las URLs. `ACCESS_COOKIE_SECURE=1` requiere HTTPS. Si el servicio se usa por HTTP local, omitirla. Los orígenes CORS deben ser valores exactos como `https://app.example`, sin ruta ni barra final; por defecto se aceptan solicitudes same-origin y no se habilitan clientes cross-origin. La edición de identidades conserva además su token `METADATA_EDIT_TOKEN`.
 
-El servidor agrega una política CSP y cabeceras de seguridad para la interfaz y la API. La política permite Tailwind desde su CDN y las fuentes de Google Fonts usadas por `public/index.html`; si se cambia el origen de esos recursos, actualizar también la CSP en `server.js`.
+El servidor agrega una política CSP y cabeceras de seguridad para la interfaz y la API, y oculta la cabecera `X-Powered-By`. La política permite Tailwind desde su CDN y las fuentes de Google Fonts usadas por `public/index.html`; si se cambia el origen de esos recursos, actualizar también la CSP en `server.js`.
 
 Se puede generar un valor con `openssl rand -hex 32`. Son archivos distintos: la clave del proveedor no debe entregarse al navegador.
 

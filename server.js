@@ -9,6 +9,7 @@ const { promisify } = require('util');
 const metadata = require('./metadata-store');
 
 const app = express();
+app.disable('x-powered-by');
 const PORT = process.env.PORT || 3000;
 const VIDEO_ROOT = process.env.VIDEO_ROOT || '/mnt/pcloud/My Videos';
 const ROOT_RESOLVED = path.resolve(VIDEO_ROOT);
