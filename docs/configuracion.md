@@ -20,6 +20,7 @@ El proyecto no carga archivos `.env` automáticamente. Para una ejecución manua
 | `METADATA_EDIT_TOKEN` | Sin definir | Web; habilita edición de nombres; mínimo 32 bytes |
 | `ACCESS_TOKEN` | Sin definir | Web; protege API y reproducción con sesión por cookie. Sin definir, el acceso de red sigue abierto |
 | `ACCESS_COOKIE_SECURE` | Desactivado | Web; `1` agrega `Secure` a la cookie, necesario detrás de HTTPS |
+| `ACCESS_COOKIE_SAMESITE` | `Strict` | Web; `Strict`, `Lax` o `None`; `None` requiere `ACCESS_COOKIE_SECURE=1` |
 | `CORS_ORIGINS` | Vacío | Web; lista separada por comas de orígenes HTTP(S) exactos autorizados para llamadas cross-origin |
 | `INDEX_MODE` | Sin definir | Indexador; `inventory` evita ffprobe |
 | `PROBE_TIMEOUT_MS` | `30000` | Indexador; timeout por ffprobe |
@@ -104,11 +105,12 @@ Para restringir la biblioteca a personas con token, crear `/etc/pcloud-video-acc
 ```ini
 ACCESS_TOKEN=REEMPLAZAR_POR_UN_TOKEN_ALEATORIO_DE_32_BYTES_O_MAS
 ACCESS_COOKIE_SECURE=1
+ACCESS_COOKIE_SAMESITE=Strict
 # Solo si una aplicación web en otro origen necesita llamar a la API:
 # CORS_ORIGINS=https://mi-dominio.example
 ```
 
-Generar el token, por ejemplo, con `openssl rand -hex 32`. El servidor pide el token una vez y entrega una sesión de 12 horas en una cookie `HttpOnly`; no se guarda en el navegador ni se agrega a las URLs. `ACCESS_COOKIE_SECURE=1` requiere HTTPS. Si el servicio se usa por HTTP local, omitirla. Los orígenes CORS deben ser valores exactos como `https://app.example`, sin ruta ni barra final; por defecto se aceptan solicitudes same-origin y no se habilitan clientes cross-origin. La edición de identidades conserva además su token `METADATA_EDIT_TOKEN`.
+Generar el token, por ejemplo, con `openssl rand -hex 32`. El servidor pide el token una vez y entrega una sesión de 12 horas en una cookie `HttpOnly`; no se guarda en el navegador ni se agrega a las URLs. `ACCESS_COOKIE_SECURE=1` requiere HTTPS. Si el servicio se usa por HTTP local, omitirla y mantener `ACCESS_COOKIE_SAMESITE=Strict`. Para una aplicación en otro sitio que necesite enviar la cookie, configurar HTTPS, `ACCESS_COOKIE_SECURE=1` y `ACCESS_COOKIE_SAMESITE=None`; el navegador todavía puede bloquear cookies de terceros según sus políticas. Los orígenes CORS deben ser valores exactos como `https://app.example`, sin ruta ni barra final; por defecto se aceptan solicitudes same-origin y no se habilitan clientes cross-origin. La edición de identidades conserva además su token `METADATA_EDIT_TOKEN`.
 
 El servidor agrega una política CSP y cabeceras de seguridad para la interfaz y la API, y oculta la cabecera `X-Powered-By`. La política permite Tailwind desde su CDN y las fuentes de Google Fonts usadas por `public/index.html`; si se cambia el origen de esos recursos, actualizar también la CSP en `server.js`.
 

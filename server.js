@@ -21,10 +21,17 @@ const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(__dirname, 'data
 const execFileAsync = promisify(execFile);
 const ACCESS_TOKEN = process.env.ACCESS_TOKEN || '';
 const ACCESS_COOKIE_SECURE = process.env.ACCESS_COOKIE_SECURE || '0';
+const ACCESS_COOKIE_SAMESITE = process.env.ACCESS_COOKIE_SAMESITE || 'Strict';
 const ACCESS_COOKIE = 'pcloud_video_session';
 const ACCESS_COOKIE_MAX_AGE = 12 * 60 * 60;
 if (!['0', '1'].includes(ACCESS_COOKIE_SECURE)) {
   throw new Error('ACCESS_COOKIE_SECURE must be 0 or 1');
+}
+if (!['Strict', 'Lax', 'None'].includes(ACCESS_COOKIE_SAMESITE)) {
+  throw new Error('ACCESS_COOKIE_SAMESITE must be Strict, Lax, or None');
+}
+if (ACCESS_COOKIE_SAMESITE === 'None' && ACCESS_COOKIE_SECURE !== '1') {
+  throw new Error('ACCESS_COOKIE_SAMESITE=None requires ACCESS_COOKIE_SECURE=1');
 }
 if (ACCESS_TOKEN && Buffer.byteLength(ACCESS_TOKEN) < 32) {
   throw new Error('ACCESS_TOKEN must contain at least 32 bytes');
@@ -113,13 +120,13 @@ app.post('/api/access/session', (req, res) => {
   const supplied = typeof req.body?.token === 'string' ? req.body.token : '';
   if (!constantTimeEqual(ACCESS_TOKEN, supplied)) return res.status(401).json({ error: 'Unauthorized' });
   const secure = ACCESS_COOKIE_SECURE === '1' ? '; Secure' : '';
-  res.setHeader('Set-Cookie', `${ACCESS_COOKIE}=${expectedSessionValue()}; Path=/; Max-Age=${ACCESS_COOKIE_MAX_AGE}; HttpOnly; SameSite=Strict${secure}`);
+  res.setHeader('Set-Cookie', `${ACCESS_COOKIE}=${expectedSessionValue()}; Path=/; Max-Age=${ACCESS_COOKIE_MAX_AGE}; HttpOnly; SameSite=${ACCESS_COOKIE_SAMESITE}${secure}`);
   res.json({ authenticated: true });
 });
 
 app.delete('/api/access/session', (_req, res) => {
   const secure = ACCESS_COOKIE_SECURE === '1' ? '; Secure' : '';
-  res.setHeader('Set-Cookie', `${ACCESS_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict${secure}`);
+  res.setHeader('Set-Cookie', `${ACCESS_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=${ACCESS_COOKIE_SAMESITE}${secure}`);
   res.status(204).end();
 });
 
