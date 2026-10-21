@@ -61,6 +61,7 @@ const visualProgressBar = document.getElementById('visualProgressBar');
 const scanProgressStatus = document.getElementById('scanProgressStatus');
 const effectiveConfiguration = document.getElementById('effectiveConfiguration');
 let selectedVideoPath = null;
+let playbackRequestId = 0;
 let selectedPersonId = null;
 let editToken = null;
 let knownPeople = [];
@@ -570,6 +571,7 @@ function renderBreadcrumbs(path) {
 }
 
 function playVideo(relativePath, name, seekToSeconds = null) {
+  const requestId = ++playbackRequestId;
   selectedVideoPath = relativePath;
   // Update UI
   videoTitle.textContent = name;
@@ -582,7 +584,7 @@ function playVideo(relativePath, name, seekToSeconds = null) {
   const streamUrl = `${API_BASE}/api/stream?path=${encodeURIComponent(relativePath)}`;
   if (Number.isFinite(seekToSeconds) && seekToSeconds >= 0) {
     videoPlayer.addEventListener('loadedmetadata', () => {
-      if (selectedVideoPath === relativePath) videoPlayer.currentTime = seekToSeconds;
+      if (requestId === playbackRequestId && selectedVideoPath === relativePath) videoPlayer.currentTime = seekToSeconds;
     }, { once: true });
   }
   videoPlayer.src = streamUrl;
