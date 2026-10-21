@@ -20,6 +20,7 @@ COPY --chown=nodejs:nodejs indexer.js metadata-store.js ./
 COPY --chown=nodejs:nodejs visual-analyzer.js ./
 COPY --chown=nodejs:nodejs config.js ./
 COPY --chown=nodejs:nodejs public ./public
+COPY --chown=nodejs:nodejs scripts ./scripts
 COPY --chown=nodejs:nodejs package*.json ./
 
 USER nodejs
