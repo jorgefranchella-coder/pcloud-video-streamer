@@ -72,6 +72,7 @@ let knownPersonMerges = [];
 let canEditPeopleDirectory = false;
 let searchTimer;
 let searchRequestId = 0;
+let treeRequestId = 0;
 const SEARCH_PAGE_SIZE = 50;
 
 // API Base URL
@@ -316,6 +317,7 @@ function setupEventListeners() {
       if (!value && !searchFrom.value && !searchTo.value && !isScopedFolderSearch()) {
         loadTree(currentPath);
       } else {
+        treeRequestId++;
         searchTimer = setTimeout(() => searchVideos(value, 0, requestId), 250);
       }
     });
@@ -388,6 +390,7 @@ function setSearchFolderPath(path) {
 }
 
 async function searchVideos(query, offset, requestId, folder = isScopedFolderSearch() ? searchFolderPath : null) {
+  if (offset === 0) treeRequestId++;
   try {
     const params = new URLSearchParams({ q: query, offset: String(offset), limit: String(SEARCH_PAGE_SIZE) });
     if (searchFrom.value) params.set('from', searchFrom.value);
@@ -511,6 +514,9 @@ function setupVideoEvents() {
 
 // Load directory tree
 async function loadTree(path) {
+  clearTimeout(searchTimer);
+  searchRequestId++;
+  const requestId = ++treeRequestId;
   searchStatus.textContent = '';
   currentPath = path;
   setSearchFolderPath(path);
@@ -523,12 +529,14 @@ async function loadTree(path) {
     const response = await fetch(`${API_BASE}/api/list?path=${encodeURIComponent(path)}`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
+    if (requestId !== treeRequestId || path !== currentPath) return;
     
     renderTree(data.items, folderTree);
     renderTree(data.items, mobileFolderTree);
     renderBreadcrumbs(path);
     breadcrumbs.classList.remove('hidden');
   } catch (err) {
+    if (requestId !== treeRequestId || path !== currentPath) return;
     console.error('Failed to load tree:', err);
     folderTree.textContent = `Error: ${err.message}`;
     mobileFolderTree.textContent = `Error: ${err.message}`;
@@ -569,8 +577,9 @@ function createTreeButton(item, parentLi) {
       const expanded = button.getAttribute('aria-expanded') === 'true';
       button.setAttribute('aria-expanded', String(!expanded));
       button.querySelector('.folder-chevron').style.transform = expanded ? 'rotate(0deg)' : 'rotate(90deg)';
+      button.subfolderRequestId = (button.subfolderRequestId || 0) + 1;
       if (expanded) parentLi.querySelector('ul.subfolder')?.remove();
-      else loadSubfolder(item.path, parentLi);
+      else loadSubfolder(item.path, parentLi, button, button.subfolderRequestId);
     });
   } else {
     button.innerHTML = '<svg class="w-5 h-5 text-green-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg><span class="truncate"></span>';
@@ -580,27 +589,51 @@ function createTreeButton(item, parentLi) {
   return button;
 }
 
-async function loadSubfolder(folderPath, parentLi) {
+async function loadSubfolder(folderPath, parentLi, folderButton, requestId) {
   try {
     const response = await fetch(`${API_BASE}/api/list?path=${encodeURIComponent(folderPath)}`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
+    if (!parentLi.isConnected || folderButton.getAttribute('aria-expanded') !== 'true' ||
+        folderButton.subfolderRequestId !== requestId) return;
     
+    const subUl = document.createElement('ul');
+    subUl.className = 'subfolder ml-4 mt-1 space-y-1 border-l border-gray-700 pl-3';
     if (data.items.length > 0) {
-      const subUl = document.createElement('ul');
-      subUl.className = 'subfolder ml-4 mt-1 space-y-1 border-l border-gray-700 pl-3';
-      subUl.setAttribute('role', 'group');
-      
       data.items.forEach(item => {
         const li = document.createElement('li');
         li.appendChild(createTreeButton(item, li));
         subUl.appendChild(li);
       });
-      
+    } else {
+      const li = document.createElement('li');
+      li.className = 'px-3 py-2 text-sm text-gray-400';
+      li.textContent = 'Carpeta vacía';
+      subUl.appendChild(li);
+    }
+    parentLi.appendChild(subUl);
+  } catch (err) {
+    if (folderButton.subfolderRequestId === requestId && folderButton.getAttribute('aria-expanded') === 'true') {
+      console.error('Failed to load subfolder:', err);
+      const subUl = document.createElement('ul');
+      subUl.className = 'subfolder ml-4 mt-1 space-y-1 border-l border-gray-700 pl-3';
+      const li = document.createElement('li');
+      li.className = 'flex flex-wrap items-center gap-2 px-3 py-2 text-sm text-amber-200';
+      const message = document.createElement('span');
+      message.textContent = 'No se pudo cargar esta carpeta.';
+      const retry = document.createElement('button');
+      retry.type = 'button';
+      retry.className = 'rounded border border-gray-600 px-2 py-1 text-xs hover:bg-gray-700';
+      retry.textContent = 'Reintentar';
+      retry.addEventListener('click', () => {
+        const retryRequestId = ++folderButton.subfolderRequestId;
+        subUl.remove();
+        loadSubfolder(folderPath, parentLi, folderButton, retryRequestId);
+      });
+      li.append(message, retry);
+      subUl.appendChild(li);
       parentLi.appendChild(subUl);
     }
-  } catch (err) {
-    console.error('Failed to load subfolder:', err);
   }
 }
 
