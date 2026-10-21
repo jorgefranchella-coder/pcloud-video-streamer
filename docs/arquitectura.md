@@ -57,7 +57,7 @@ No hay caché persistente de fotogramas, historial de versiones completas de fic
 
 ## SQLite
 
-Archivo: `DATA_DIR/videos.sqlite`. Se habilitan WAL, claves foráneas y espera de hasta 5 segundos ante bloqueo. Los procesos crean tablas y columnas faltantes al importar `metadata-store.js`; no existe un sistema completo de migraciones versionadas. `user_version=1` se utiliza para la reconstrucción inicial del índice FTS.
+Archivo: `DATA_DIR/videos.sqlite`. Se habilitan WAL, claves foráneas y espera de hasta 5 segundos ante bloqueo. Los procesos crean tablas y columnas faltantes al importar `metadata-store.js`, dentro de una transacción `BEGIN IMMEDIATE` para serializar arranques y revertir los cambios si la inicialización falla. No existe un sistema completo de migraciones versionadas. `user_version=1` se utiliza para la reconstrucción inicial del índice FTS.
 
 | Tabla | Propósito y campos principales |
 |---|---|
