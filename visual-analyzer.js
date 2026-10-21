@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
-const { db, buildVisualSearchText } = require('./metadata-store');
+const { db, buildVisualSearchText, withJobLock } = require('./metadata-store');
 
 const execFileAsync = promisify(execFile);
 const VIDEO_ROOT = path.resolve(process.env.VIDEO_ROOT || '/mnt/pcloud/My Videos');
@@ -195,9 +195,10 @@ async function analyzeVideo(row, apiKey) {
   }
 }
 
-async function run() {
+async function runLocked() {
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) throw new Error('OPENROUTER_API_KEY is required for visual analysis');
+  // The exclusive lock proves no visual worker still owns these rows.
   db.prepare("UPDATE videos SET visual_status = 'pending' WHERE visual_status = 'running'").run();
   const candidates = Number.isInteger(TARGET_ID) && TARGET_ID > 0
     ? db.prepare("SELECT id, relative_path, fingerprint, duration_ms, confirmed_people_json FROM videos WHERE id = ? AND status = 'done'").all(TARGET_ID)
@@ -207,6 +208,10 @@ async function run() {
         ORDER BY id LIMIT ?`).all(RETRY_FAILED ? 1 : 0, MAX_VISUAL);
   for (const row of candidates) await analyzeVideo(row, apiKey);
   console.log(`Visual batch: ${candidates.length} video(s) attempted`);
+}
+
+function run() {
+  return withJobLock('visual-analyzer', runLocked);
 }
 
 if (require.main === module) {

@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
-const { db, getByPath, upsert } = require('./metadata-store');
+const { db, getByPath, upsert, withJobLock } = require('./metadata-store');
 
 const execFileAsync = promisify(execFile);
 const VIDEO_ROOT = path.resolve(process.env.VIDEO_ROOT || '/mnt/pcloud/My Videos');
@@ -115,7 +115,7 @@ async function scanDirectory(relativeDir, scanId, counters) {
   }
 }
 
-async function runScan() {
+async function runScanLocked() {
   const rootStat = await fs.promises.stat(VIDEO_ROOT);
   if (!rootStat.isDirectory()) throw new Error(`VIDEO_ROOT is not a directory: ${VIDEO_ROOT}`);
   const scan = db.prepare("INSERT INTO scans (status) VALUES ('running')").run();
@@ -136,6 +136,10 @@ async function runScan() {
       .run(counters.seen, String(error.message).slice(0, 1000), scan.lastInsertRowid);
     throw error;
   }
+}
+
+function runScan() {
+  return withJobLock('indexer', runScanLocked);
 }
 
 if (require.main === module) {

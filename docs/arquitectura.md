@@ -26,7 +26,7 @@ flowchart LR
 
 La aplicación lee archivos a través del montaje; no utiliza directamente la API de pCloud. rclone administra credenciales, acceso remoto y caché. Aunque solo se envían fotogramas a OpenRouter, leer y buscar posiciones con ffprobe/ffmpeg puede descargar una cantidad importante del archivo a la caché local.
 
-El servidor, el indexador y el analizador son procesos independientes que comparten una base SQLite local. La API no ofrece rutas para arrancar trabajos. systemd ejecuta los procesos; solo el indexador tiene un temporizador incluido.
+El servidor, el indexador y el analizador son procesos independientes que comparten una base SQLite local. La API no ofrece rutas para arrancar trabajos. systemd ejecuta los procesos; solo el indexador tiene un temporizador incluido. El indexador y el analizador reclaman bloqueos SQLite separados antes de trabajar; una segunda instancia de la misma etapa termina con error. Los bloqueos huérfanos del mismo host se recuperan al detectar que el PID ya no existe.
 
 ## Inventario y extracción técnica
 
@@ -42,7 +42,7 @@ Las fechas candidatas proceden de etiquetas de captura de contenedor/streams, de
 
 ## Análisis visual
 
-1. Exige `OPENROUTER_API_KEY`. Restablece registros visuales `running` a `pending` al arrancar.
+1. Reclama el bloqueo exclusivo de la etapa visual, exige `OPENROUTER_API_KEY` y restablece registros visuales `running` a `pending`. Ese restablecimiento solo ocurre cuando la instancia anterior dejó de existir y se pudo adquirir el bloqueo.
 2. Selecciona videos con estado técnico `done`, por ID ascendente, hasta el límite del lote. `VISUAL_VIDEO_ID` sustituye esa selección por un video concreto y permite regenerarlo.
 3. Comprueba ruta real, tamaño y mtime contra el fingerprint guardado.
 4. Extrae imágenes al 8 %, 35 %, 65 % y 92 % de la duración, redondeando a segundos y eliminando duplicados. Usa el segundo cero si no hay duración o es menor a dos segundos.
@@ -79,7 +79,7 @@ Las observaciones tienen descripción y segundo, pero no ID estable propio, reco
 | Video visual | Nulo se interpreta como pendiente; `pending`, `running`, `done`, `failed` |
 | Recorrido | `running`, `done`, `failed`; existe un registro histórico `interrupted`, pero el indexador actual no lo genera al recibir señales |
 
-No hay bloqueo de exclusión entre procesos equivalentes. Dos indexadores pueden interferir en `last_seen_scan` y el marcado `missing`. Dos analizadores pueden elegir los mismos videos; además, el reinicio global de `running` puede modificar el estado de un trabajo aún activo. WAL permite concurrencia de acceso a la base, pero no resuelve estas carreras de negocio.
+`process_locks` serializa instancias del indexador entre sí y del analizador entre sí. Usa PID y nombre de host para identificar al propietario y recuperar registros abandonados en el mismo servidor. La recuperación automática presupone que los procesos usan la misma base SQLite local y el mismo host; no es un coordinador distribuido para bases compartidas entre servidores.
 
 ## Búsqueda e interfaz
 

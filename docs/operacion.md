@@ -72,7 +72,7 @@ Aplicar `sudo systemctl daemon-reload`; el siguiente arranque usará esos valore
 
 ## Ejecución técnica sin privilegios de systemd
 
-Es posible ejecutar el indexador como el usuario con acceso a los videos y a la base. Primero comprobar que el servicio o su temporizador no vaya a lanzar otra instancia durante ese recorrido. Si se dispone de privilegios, detener temporalmente el timer y restablecerlo después. No lanzar dos indexadores simultáneamente.
+Es posible ejecutar el indexador como el usuario con acceso a los videos y a la base. La exclusión SQLite impide que dos indexadores simultáneos recorran la biblioteca; la segunda instancia terminará indicando que el trabajo ya está activo. No borrar manualmente `process_locks` mientras el proceso propietario siga vivo.
 
 ```bash
 cd /home/jorge/orca/workspaces/Video-Home/meta-data-videos
@@ -94,7 +94,7 @@ Esta ejecución no cambia el estado de la unidad systemd. El analizador visual t
 | JSON inválido o esquema incompatible | Revisar `visual_error`; el proveedor debe aceptar imágenes y salida estructurada. Reintentar de forma acotada o revisar el modelo |
 | `ffprobe` o `ffmpeg` lento | Ver montaje, caché y archivo actual. Un timeout de proceso no garantiza respuesta inmediata de una lectura FUSE bloqueada |
 | Contador recorrido en cero | Se persiste cada 100 archivos; contrastar crecimiento de fichas y proceso activo |
-| `running` tras un cierre abrupto | Confirmar que no haya proceso vivo. Registrar el incidente y corregir el estado con respaldo; no arrancar una segunda instancia a ciegas |
+| `running` tras un cierre abrupto | Una nueva ejecución visual recupera esos registros después de adquirir su bloqueo. Si el bloqueo del mismo host no se recupera, comprobar el PID informado; no borrar el bloqueo mientras ese proceso siga vivo |
 | SIGSEGV / `core-dump` | Consultar journal y, si está instalado, `coredumpctl info`; revisar runtime Node y módulo nativo. La causa observada sigue sin determinar |
 | Servicio técnico sigue `failed` tras un lote manual exitoso | Son estados diferentes. `sudo systemctl reset-failed pcloud-video-indexer.service` limpia el registro de systemd; no repara ni procesa archivos |
 | Video visible pero no reproducible | Comprobar códec del navegador y lectura remota. No existe transcodificación |

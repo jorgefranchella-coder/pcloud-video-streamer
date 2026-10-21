@@ -1,5 +1,7 @@
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
+const crypto = require('crypto');
 const Database = require('better-sqlite3');
 
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
@@ -44,6 +46,37 @@ db.exec(`
     error TEXT
   );
 `);
+
+db.exec(`CREATE TABLE IF NOT EXISTS process_locks (
+  name TEXT PRIMARY KEY,
+  owner_token TEXT NOT NULL,
+  owner_pid INTEGER NOT NULL,
+  owner_host TEXT NOT NULL,
+  acquired_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+)`);
+
+function withJobLock(name, operation) {
+  const token = crypto.randomUUID();
+  const host = os.hostname();
+  const acquire = db.transaction(() => {
+    const current = db.prepare('SELECT owner_token, owner_pid, owner_host FROM process_locks WHERE name = ?').get(name);
+    if (current) {
+      let stale = false;
+      if (current.owner_host === host) {
+        try { process.kill(current.owner_pid, 0); }
+        catch (error) { stale = error.code === 'ESRCH'; }
+      }
+      if (!stale) throw new Error(`${name} is already running on ${current.owner_host} (pid ${current.owner_pid})`);
+      db.prepare('DELETE FROM process_locks WHERE name = ? AND owner_token = ?').run(name, current.owner_token);
+    }
+    db.prepare('INSERT INTO process_locks (name, owner_token, owner_pid, owner_host) VALUES (?, ?, ?, ?)')
+      .run(name, token, process.pid, host);
+  });
+  acquire.immediate();
+  return Promise.resolve().then(operation).finally(() => {
+    db.prepare('DELETE FROM process_locks WHERE name = ? AND owner_token = ?').run(name, token);
+  });
+}
 
 const visualColumns = {
   visual_status: 'TEXT',
@@ -280,5 +313,5 @@ function setVideoPerson({ relativePath, observationIndex, personId, personName }
 
 module.exports = {
   db, getByPath, getById, upsert, parseVideo, status, search, buildVisualSearchText,
-  setConfirmedPeople, listPeople, identifiedPeopleForVideo, setVideoPerson
+  setConfirmedPeople, listPeople, identifiedPeopleForVideo, setVideoPerson, withJobLock
 };
