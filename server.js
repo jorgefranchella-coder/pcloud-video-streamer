@@ -85,7 +85,8 @@ function hasValidSession(req) {
 function sameOrigin(req, origin) {
   try {
     const parsed = new URL(origin);
-    return parsed.host === req.get('host') && parsed.protocol === `${req.protocol}:`;
+    const requestOrigin = new URL(`${req.protocol}://${req.get('host')}`);
+    return parsed.origin === requestOrigin.origin;
   } catch {
     return false;
   }
