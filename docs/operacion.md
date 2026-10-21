@@ -129,11 +129,19 @@ El verificador comprueba el marcador, integridad SQLite, claves foráneas, tabla
 
 ## Restauración
 
-1. Detener timer, servidor y ambos servicios de lote; verificar también procesos manuales. Evitar cualquier escritor durante la sustitución.
-2. Conservar el directorio de datos actual completo, incluidos WAL/SHM, en otra ubicación. No mezclar archivos WAL antiguos con una base restaurada.
-3. Crear un nuevo `DATA_DIR`, colocar el backup consistente como `videos.sqlite` y asignar permisos al usuario del servicio.
-4. Verificar integridad, conteos, nombres confirmados y rutas de una muestra. Mantener el respaldo previo para poder revertir.
-5. Iniciar el servidor y revisar interfaz/API. Reactivar después los temporizadores que estaban activos; el timer visual es opcional y queda deshabilitado por defecto.
+Detener timer, servidor y ambos servicios de lote; verificar también procesos manuales. Evitar cualquier escritor durante la restauración. Conservar el directorio de datos actual completo, incluidos WAL/SHM, en otra ubicación; no mezclar esos archivos con la base restaurada.
+
+Restaurar siempre a un `DATA_DIR` nuevo que todavía no exista. El comando verifica primero el respaldo, copia la base y las evidencias, y vuelve a comprobar integridad, claves foráneas y tamaño de las evidencias:
+
+```bash
+npm run restore-data -- \
+  /ruta/privada/pcloud-video-backups/pcloud-video-FECHA-PID \
+  /home/jorge/orca/workspaces/Video-Home/meta-data-videos/data-restored
+```
+
+La ruta destino contiene `videos.sqlite`, `evidence/` si estaba en el respaldo y `RESTORE_COMPLETE`. Si falla una comprobación, el comando elimina la carpeta destino que acaba de crear. Apuntar `DATA_DIR` a esa ruta nueva en el servidor, el indexador y el analizador visual; deben compartir exactamente la misma base. Asignar permisos al usuario de systemd y aplicar `daemon-reload` si cambió un archivo de entorno.
+
+Iniciar primero el servidor y revisar interfaz/API, conteos, nombres confirmados y rutas de una muestra. Mantener el directorio anterior y el respaldo para poder revertir. Reactivar después solo los timers que estaban activos antes de la restauración; el timer visual es opcional y queda deshabilitado por defecto.
 
 ## Desarrollo y comprobaciones
 

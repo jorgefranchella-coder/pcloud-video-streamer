@@ -27,12 +27,23 @@ async function main() {
     throw new Error('Usage: node scripts/verify-backup.js /absolute/path/to/backup');
   }
   const backupDir = path.resolve(backupDirArg);
-  const complete = await fs.promises.readFile(path.join(backupDir, 'COMPLETE'), 'utf8');
+  const backupStat = await fs.promises.lstat(backupDir);
+  if (!backupStat.isDirectory() || backupStat.isSymbolicLink()) throw new Error('Backup path must be a real directory');
+  const completePath = path.join(backupDir, 'COMPLETE');
+  const manifestPath = path.join(backupDir, 'manifest.json');
+  for (const markerPath of [completePath, manifestPath]) {
+    const stat = await fs.promises.lstat(markerPath);
+    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`Backup marker must be a regular file: ${path.basename(markerPath)}`);
+  }
+  const complete = await fs.promises.readFile(completePath, 'utf8');
   if (complete.trim() !== 'ok') throw new Error('Backup completion marker is invalid');
-  const manifest = JSON.parse(await fs.promises.readFile(path.join(backupDir, 'manifest.json'), 'utf8'));
+  const manifest = JSON.parse(await fs.promises.readFile(manifestPath, 'utf8'));
   if (manifest.sqlite_integrity_check !== 'ok') throw new Error('Manifest does not report a clean SQLite integrity check');
 
-  const db = new Database(path.join(backupDir, 'videos.sqlite'), { readonly: true, fileMustExist: true });
+  const databasePath = path.join(backupDir, 'videos.sqlite');
+  const databaseStat = await fs.promises.lstat(databasePath);
+  if (!databaseStat.isFile() || databaseStat.isSymbolicLink()) throw new Error('Backup database must be a regular file');
+  const db = new Database(databasePath, { readonly: true, fileMustExist: true });
   let integrity;
   let foreignKeyErrors;
   let videoCount;

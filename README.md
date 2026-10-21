@@ -70,6 +70,7 @@ pcloud-video-visual.service      Lote visual manual
 rclone-pcloud.service            Montaje remoto
 Dockerfile                      Imagen con Node y ffmpeg
 package.json / package-lock.json Dependencias y scripts npm
+scripts/                         Respaldo, verificación y restauración de DATA_DIR
 data/                           SQLite local; excluido de Git
 docs/                           Documentación y planes históricos
 ```

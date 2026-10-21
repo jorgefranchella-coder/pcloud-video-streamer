@@ -10,7 +10,8 @@
     "inventory": "INDEX_MODE=inventory node indexer.js",
     "analyze": "node visual-analyzer.js",
     "backup": "node scripts/backup-data.js",
-    "verify-backup": "node scripts/verify-backup.js"
+    "verify-backup": "node scripts/verify-backup.js",
+    "restore-data": "node scripts/restore-data.js"
   },
   "dependencies": {
     "better-sqlite3": "^13.0.3",
