@@ -12,6 +12,8 @@ db.pragma('journal_mode = WAL');
 db.pragma('busy_timeout = 5000');
 db.pragma('foreign_keys = ON');
 
+db.exec('BEGIN IMMEDIATE');
+try {
 const searchSchemaVersion = db.pragma('user_version', { simple: true });
 db.exec(`
   CREATE TABLE IF NOT EXISTS videos (
@@ -360,6 +362,11 @@ const migrateObservations = db.transaction(() => {
     CREATE INDEX IF NOT EXISTS video_person_video_revision_idx ON video_person_observations(video_id, analysis_revision)`);
 });
 migrateObservations.immediate();
+db.exec('COMMIT');
+} catch (error) {
+  if (db.inTransaction) db.exec('ROLLBACK');
+  throw error;
+}
 
 const getByPath = db.prepare('SELECT * FROM videos WHERE relative_path = ?');
 const getById = db.prepare('SELECT * FROM videos WHERE id = ?');
