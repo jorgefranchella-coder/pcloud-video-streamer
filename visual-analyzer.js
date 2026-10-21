@@ -298,6 +298,16 @@ async function analyzeVideo(row, apiKey) {
       }
     }
     if (!frames.length) throw new Error('No frames could be extracted');
+    if (getAutomationControl().paused) {
+      db.prepare(`UPDATE videos SET visual_status = 'pending', visual_attempts = MAX(visual_attempts - 1, 0),
+          visual_error = NULL, visual_error_class = NULL, visual_next_attempt_at = NULL
+        WHERE id = ? AND fingerprint = ? AND visual_status = 'running'`).run(row.id, row.fingerprint);
+      setWorkerActivity('visual-analyzer', {
+        phase: 'pausado', videoId: row.id, path: row.relative_path,
+        result: 'No se envió el video al proveedor; quedó pendiente para reanudar'
+      });
+      return true;
+    }
     setWorkerActivity('visual-analyzer', { videoId: row.id, path: row.relative_path, phase: 'analizando con el proveedor' });
     const { result, usage } = await describeFrames(frames, apiKey);
     const finalStat = await fs.promises.stat(fullPath);
