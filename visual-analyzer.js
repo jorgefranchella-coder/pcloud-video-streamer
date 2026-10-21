@@ -15,6 +15,12 @@ const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(__dirname, 'data
 const CONFIG = visualConfiguration();
 const MODEL = CONFIG.visual_model;
 const API_URL = process.env.OPENROUTER_API_URL || 'https://openrouter.ai/api/v1/chat/completions';
+let parsedApiUrl;
+try { parsedApiUrl = new URL(API_URL); }
+catch { throw new Error('OPENROUTER_API_URL must be a valid HTTPS URL'); }
+if (parsedApiUrl.protocol !== 'https:' || parsedApiUrl.username || parsedApiUrl.password) {
+  throw new Error('OPENROUTER_API_URL must use HTTPS and must not contain credentials');
+}
 const PROMPT_VERSION = 'visual-v2';
 const MAX_VISUAL = CONFIG.max_visual;
 const MAX_VISUAL_ATTEMPTS = CONFIG.max_visual_attempts;
@@ -163,6 +169,7 @@ async function describeFrames(frames, apiKey) {
   try {
     response = await fetch(API_URL, {
       method: 'POST',
+      redirect: 'error',
       headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
       model: MODEL,

@@ -28,7 +28,7 @@ El proyecto no carga archivos `.env` automáticamente. Para una ejecución manua
 | `RETRY_FAILED` | Desactivado | Indexador; exactamente `1` reintenta fallos técnicos |
 | `OPENROUTER_API_KEY` | Sin definir | Visual; obligatoria |
 | `OPENROUTER_MODEL` | `openrouter/free` | Visual; selector de modelo/router |
-| `OPENROUTER_API_URL` | `https://openrouter.ai/api/v1/chat/completions` | Visual; endpoint de inferencia |
+| `OPENROUTER_API_URL` | `https://openrouter.ai/api/v1/chat/completions` | Visual; endpoint de inferencia, exige HTTPS y no sigue redirecciones |
 | `MAX_VISUAL` | `1` | Visual; lote entre 1 y 100; `0` no significa ilimitado |
 | `MAX_VISUAL_ATTEMPTS` | `5` | Visual; intentos automáticos máximos por fingerprint, entre 1 y 20 |
 | `MAX_VISUAL_REQUESTS_PER_DAY` | `0` | Visual; solicitudes iniciadas por día UTC; `0` desactiva el límite |
