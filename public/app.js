@@ -181,6 +181,7 @@ function renderProcessProgress(status) {
   const configured = status.worker_configuration || {};
   const activity = status.worker_activity || {};
   const visualWorker = activity['visual-analyzer'];
+  const providerControl = status.visual_provider_control || {};
   if (visualWorker?.active) {
     const current = visualWorker.current_path ? ` · ${visualWorker.current_path}` : '';
     const phase = visualWorker.phase ? ` (${visualWorker.phase})` : '';
@@ -189,6 +190,13 @@ function renderProcessProgress(status) {
     visualProgressDetail.textContent += ' · El último proceso visual se interrumpió; se recuperará al reiniciar el analizador.';
   } else if (count(visual.running)) {
     visualProgressDetail.textContent += ' · Hay fichas running, pero no se confirma un proceso visual activo.';
+  }
+  if (providerControl.paused) {
+    const until = providerControl.paused_until ? new Date(`${providerControl.paused_until.replace(' ', 'T')}Z`) : null;
+    const waitText = until && !Number.isNaN(until.getTime())
+      ? `hasta ${until.toLocaleString('es-AR', { dateStyle: 'short', timeStyle: 'short', timeZone: 'UTC' })} UTC`
+      : 'cambiar clave, modelo o endpoint para reactivar';
+    visualProgressDetail.textContent += ` · Proveedor pausado: ${providerControl.reason} · ${waitText}`;
   }
   const history = status.worker_history || {};
   const describeLastRun = run => {

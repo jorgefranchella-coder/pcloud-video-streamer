@@ -77,6 +77,14 @@ db.exec(`CREATE TABLE IF NOT EXISTS visual_daily_requests (
   utc_day TEXT PRIMARY KEY,
   request_count INTEGER NOT NULL DEFAULT 0
 )`);
+db.exec(`CREATE TABLE IF NOT EXISTS visual_provider_control (
+  singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+  configuration_fingerprint TEXT NOT NULL,
+  error_class TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  paused_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  paused_until TEXT
+)`);
 db.exec(`CREATE TABLE IF NOT EXISTS worker_run_history (
   id INTEGER PRIMARY KEY,
   worker TEXT NOT NULL,
@@ -350,6 +358,7 @@ function status() {
   const utcDay = new Date().toISOString().slice(0, 10);
   const dailyRequests = db.prepare('SELECT request_count FROM visual_daily_requests WHERE utc_day = ?').get(utcDay)?.request_count || 0;
   const dailyLimit = workerConfiguration.visual?.max_visual_requests_per_day || 0;
+  const providerControl = getVisualProviderControl();
   const workerHistory = Object.fromEntries(['indexer', 'visual-analyzer'].map(worker => [worker,
     db.prepare(`SELECT id, status, started_at, heartbeat_at, finished_at, last_result, last_error
       FROM worker_run_history WHERE worker = ? ORDER BY id DESC LIMIT 10`).all(worker)
@@ -378,6 +387,10 @@ function status() {
       utc_day: utcDay, requests: dailyRequests, limit: dailyLimit,
       remaining: dailyLimit ? Math.max(0, dailyLimit - dailyRequests) : null
     },
+    visual_provider_control: providerControl ? {
+      paused: true, error_class: providerControl.error_class, reason: providerControl.reason,
+      paused_at: providerControl.paused_at, paused_until: providerControl.paused_until
+    } : { paused: false },
     last_scan: scan || null,
     worker_configuration: workerConfiguration,
     worker_history: workerHistory,
@@ -395,6 +408,24 @@ function reserveVisualDailyRequest(limit) {
     return true;
   });
   return reserve.immediate();
+}
+
+function getVisualProviderControl() {
+  return db.prepare('SELECT error_class, reason, paused_at, paused_until, configuration_fingerprint FROM visual_provider_control WHERE singleton = 1').get() || null;
+}
+
+function setVisualProviderControl({ configurationFingerprint, errorClass, reason, pausedUntil = null }) {
+  db.prepare(`INSERT INTO visual_provider_control
+      (singleton, configuration_fingerprint, error_class, reason, paused_until)
+    VALUES (1, ?, ?, ?, ?)
+    ON CONFLICT(singleton) DO UPDATE SET configuration_fingerprint = excluded.configuration_fingerprint,
+      error_class = excluded.error_class, reason = excluded.reason,
+      paused_at = CURRENT_TIMESTAMP, paused_until = excluded.paused_until`)
+    .run(configurationFingerprint, errorClass, String(reason).slice(0, 500), pausedUntil);
+}
+
+function clearVisualProviderControl() {
+  db.prepare('DELETE FROM visual_provider_control WHERE singleton = 1').run();
 }
 
 function setWorkerConfiguration(worker, configuration) {
@@ -540,5 +571,6 @@ function setVideoPerson({ relativePath, observationIndex, personId, personName, 
 module.exports = {
   db, getByPath, getById, upsert, parseVideo, status, search, buildVisualSearchText,
   setConfirmedPeople, listPeople, identifiedPeopleForVideo, staleIdentificationsForVideo,
-  setVideoPerson, withJobLock, setWorkerConfiguration, setWorkerActivity, reserveVisualDailyRequest
+  setVideoPerson, withJobLock, setWorkerConfiguration, setWorkerActivity, reserveVisualDailyRequest,
+  getVisualProviderControl, setVisualProviderControl, clearVisualProviderControl
 };

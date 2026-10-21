@@ -26,7 +26,7 @@ flowchart LR
 
 La aplicación lee archivos a través del montaje; no utiliza directamente la API de pCloud. rclone administra credenciales, acceso remoto y caché. Aunque solo se envían fotogramas a OpenRouter, leer y buscar posiciones con ffprobe/ffmpeg puede descargar una cantidad importante del archivo a la caché local.
 
-El servidor, el indexador y el analizador son procesos independientes que comparten una base SQLite local. La API no ofrece rutas para arrancar trabajos. systemd ejecuta los procesos; solo el indexador tiene un temporizador incluido. El indexador y el analizador reclaman en una transacción un bloqueo SQLite común para toda la biblioteca y otro propio de su etapa; una segunda tarea concurrente termina con error. Los bloqueos huérfanos del mismo host se recuperan al detectar que el PID ya no existe.
+El servidor, el indexador y el analizador son procesos independientes que comparten una base SQLite local. La API no ofrece rutas para arrancar trabajos. systemd incluye un temporizador técnico y otro visual opcional; el visual no se habilita durante la instalación. El indexador y el analizador reclaman en una transacción un bloqueo SQLite común para toda la biblioteca y otro propio de su etapa; una segunda tarea concurrente termina con error. Los bloqueos huérfanos del mismo host se recuperan al detectar que el PID ya no existe.
 
 ## Inventario y extracción técnica
 
@@ -51,7 +51,7 @@ Las fechas candidatas proceden de etiquetas de captura de contenedor/streams, de
 7. Parsea JSON y valida tipos, tamaños de listas e índices de fotogramas. Convierte cada referencia en `at_seconds`. El prompt vigente es `visual-v2` y pide textos en español sin nombres inferidos.
 8. Revalida el archivo antes de guardar. Persiste ficha, nueva revisión, modelo configurado, versión de prompt, uso reportado y fingerprint; reconstruye el texto de búsqueda. Las asociaciones anteriores quedan guardadas como pendientes de revisión y no se aplican a la revisión nueva.
 
-Los errores 401/403 detienen el lote y requieren corregir credenciales o permisos. Los 429 y 5xx detienen el lote y programan espera exponencial. Fallos transitorios individuales también reciben reintento diferido; errores 4xx y respuestas rechazadas no se reintentan automáticamente. El límite automático por fingerprint es configurable. Otros fallos individuales pueden registrarse y permitir que el lote termine con código cero. Por eso «servicio finalizado con éxito» no garantiza que todas sus fichas hayan tenido éxito.
+Los errores 401/403 y otros 4xx del proveedor detienen el lote y pausan la etapa hasta que cambie la clave, el modelo o el endpoint. Los 429, 5xx y fallos de red detienen el lote y pausan llamadas hasta vencer una espera exponencial. Fallos transitorios individuales reciben reintento diferido; respuestas rechazadas no se reintentan automáticamente. El límite automático por fingerprint es configurable. Otros fallos individuales pueden registrarse y permitir que el lote termine con código cero. Por eso «servicio finalizado con éxito» no garantiza que todas sus fichas hayan tenido éxito.
 
 No hay caché persistente de fotogramas, historial de versiones completas de fichas visuales ni tabla general de trabajos. Sí se guardan los intentos y próximas fechas por video, un contador diario de solicitudes y un historial acotado de ejecuciones de trabajadores. `visual_model` guarda el selector configurado; con un router no identifica necesariamente el modelo efectivo que atendió la solicitud.
 
@@ -67,6 +67,7 @@ Archivo: `DATA_DIR/videos.sqlite`. Se habilitan WAL, claves foráneas y espera d
 | `worker_runs` | Último estado de ejecución, heartbeat, archivo/fase actual y resultado/error |
 | `worker_run_history` | Historial acotado a 200 ejecuciones recientes por etapa |
 | `visual_daily_requests` | Solicitudes visuales iniciadas por día UTC |
+| `visual_provider_control` | Pausa persistente por error de configuración o espera de proveedor |
 | `worker_configuration` | Configuración efectiva no secreta registrada por cada etapa |
 | `people` | ID, nombre único con colación SQLite `NOCASE`, creación |
 | `video_person_observations` | Clave `(video_id, analysis_revision, observation_index)`, descripción/segundo observados, persona, confirmación y fecha opcional de revisión; conserva identidades anteriores sin asignarlas a otra ficha |

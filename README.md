@@ -13,7 +13,7 @@ Documentación revisada contra el código el **21 de octubre de 2026**. Las cifr
 - Catálogo de personas: asignación manual de un nombre a cada observación, integrada en el streamer.
 - Panel de progreso técnico y visual, con lotes recientes y contador diario de solicitudes del proveedor.
 
-El análisis visual no transcribe audio, no reconoce identidades automáticamente y no examina cada instante del video. La reproducción depende de los códecs que soporte el navegador; no hay transcodificación. El analizador visual trabaja por lotes manuales: no existe un temporizador visual instalado por el proyecto.
+El análisis visual no transcribe audio, no reconoce identidades automáticamente y no examina cada instante del video. La reproducción depende de los códecs que soporte el navegador; no hay transcodificación. El analizador visual trabaja por lotes manuales por defecto; el repositorio incluye un temporizador opcional que no queda habilitado durante la instalación.
 
 ## Documentación
 

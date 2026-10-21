@@ -114,7 +114,7 @@ Se puede generar un valor con `openssl rand -hex 32`. Son archivos distintos: la
 
 ```bash
 sudo chmod 600 /etc/pcloud-video-visual.env /etc/pcloud-video-metadata.env /etc/pcloud-video-access.env
-sudo cp pcloud-video-streamer.service pcloud-video-indexer.service pcloud-video-indexer.timer pcloud-video-visual.service /etc/systemd/system/
+sudo cp pcloud-video-streamer.service pcloud-video-indexer.service pcloud-video-indexer.timer pcloud-video-visual.service pcloud-video-visual.timer /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now pcloud-video-streamer.service
 sudo systemctl enable --now pcloud-video-indexer.timer
@@ -129,8 +129,18 @@ El temporizador técnico puede activar una ejecución al habilitarlo si ya pasó
 | `pcloud-video-indexer.service` | `oneshot`; un recorrido y hasta 50 intentos técnicos con valores por defecto |
 | `pcloud-video-indexer.timer` | `OnBootSec=5min`, después `OnUnitInactiveSec=6h` |
 | `pcloud-video-visual.service` | `oneshot` manual; termina al finalizar el lote |
+| `pcloud-video-visual.timer` | Opcional; primer lote 15 min después del arranque, siguientes una hora después de terminar el lote anterior |
 
-El temporizador técnico es relativo, no un calendario de horas fijas. `Persistent=true` aparece en el archivo, pero no debe interpretarse como recuperación garantizada de todas las ejecuciones omitidas de este temporizador relativo. La etapa visual no se inicia automáticamente cuando termina la técnica.
+El temporizador técnico es relativo, no un calendario de horas fijas. `Persistent=true` aparece en el archivo, pero no debe interpretarse como recuperación garantizada de todas las ejecuciones omitidas de este temporizador relativo. La etapa visual no se inicia automáticamente cuando termina la técnica; el temporizador visual opcional continúa la cola en lotes separados.
+
+Para activar la continuación visual, primero definir `MAX_VISUAL_REQUESTS_PER_DAY` en `/etc/pcloud-video-visual.env` con el máximo diario que se desea permitir. Verificar que la clave, el modelo y el endpoint sean correctos; los cambios de configuración levantan una pausa permanente del proveedor, mientras que errores de cuota/red tienen espera automática. Luego habilitar el timer:
+
+```bash
+sudo systemctl enable --now pcloud-video-visual.timer
+systemctl list-timers pcloud-video-visual.timer
+```
+
+El timer no se habilita en la instalación inicial. Cada ejecución respeta `MAX_VISUAL`, el límite diario, los reintentos y el bloqueo común. Si se alcanza el límite diario, las fichas siguen pendientes; systemd las intentará en su siguiente intervalo, una vez renovado el contador UTC.
 
 Cambiar código del servidor exige reiniciarlo. Los procesos de lote cargan el nuevo código en su próximo arranque. Los archivos estáticos se leen en las peticiones; recargar el navegador. Para cambios de unidades: copiar nuevamente, `daemon-reload` y reiniciar la unidad afectada. Cambiar solo el contenido de un `EnvironmentFile` requiere un nuevo arranque del proceso que lo consume.
 

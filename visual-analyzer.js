@@ -3,7 +3,10 @@ const path = require('path');
 const crypto = require('crypto');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
-const { db, buildVisualSearchText, withJobLock, setWorkerConfiguration, setWorkerActivity, reserveVisualDailyRequest } = require('./metadata-store');
+const {
+  db, buildVisualSearchText, withJobLock, setWorkerConfiguration, setWorkerActivity,
+  reserveVisualDailyRequest, getVisualProviderControl, setVisualProviderControl, clearVisualProviderControl
+} = require('./metadata-store');
 const { visualConfiguration } = require('./config');
 
 const execFileAsync = promisify(execFile);
@@ -17,6 +20,10 @@ const MAX_VISUAL_ATTEMPTS = CONFIG.max_visual_attempts;
 const MAX_VISUAL_REQUESTS_PER_DAY = CONFIG.max_visual_requests_per_day;
 const RETRY_FAILED = CONFIG.retry_visual_failed;
 const TARGET_ID = CONFIG.visual_video_id;
+
+function providerConfigurationFingerprint(apiKey) {
+  return crypto.createHash('sha256').update(`${API_URL}\0${MODEL}\0${apiKey}`).digest('hex');
+}
 
 const evidenceItem = {
   type: 'object',
@@ -116,10 +123,12 @@ async function describeFrames(frames, apiKey) {
     error.code = 'VISUAL_DAILY_BUDGET_EXHAUSTED';
     throw error;
   }
-  const response = await fetch(API_URL, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
+  let response;
+  try {
+    response = await fetch(API_URL, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
       model: MODEL,
       provider: { require_parameters: true },
       messages: [
@@ -134,9 +143,14 @@ async function describeFrames(frames, apiKey) {
         json_schema: { name: 'video_visual_sheet', strict: true, schema: responseSchema }
       },
       max_tokens: 2000
-    }),
-    signal: AbortSignal.timeout(120000)
-  });
+      }),
+      signal: AbortSignal.timeout(120000)
+    });
+  } catch (error) {
+    const networkError = new Error(error.message || 'Provider request failed');
+    networkError.code = 'VISUAL_PROVIDER_NETWORK';
+    throw networkError;
+  }
   if (!response.ok) {
     const body = await response.text();
     throw new Error(`OpenRouter HTTP ${response.status}: ${body.slice(0, 300)}`);
@@ -220,6 +234,8 @@ async function analyzeVideo(row, apiKey) {
     const authenticationFailure = /^OpenRouter HTTP (401|403)\b/.test(message);
     const providerRateLimit = /^OpenRouter HTTP 429\b/.test(message);
     const providerServerFailure = /^OpenRouter HTTP 5\d\d\b/.test(message);
+    const providerConfigurationFailure = /^OpenRouter HTTP 4\d\d\b/.test(message) && !providerRateLimit;
+    const providerNetworkFailure = error.code === 'VISUAL_PROVIDER_NETWORK';
     const permanentFailure = (/^OpenRouter HTTP 4\d\d\b/.test(message) && !providerRateLimit) ||
       message.startsWith('OpenRouter refusal:') || message.startsWith('Invalid model response:') ||
       message.includes('Video changed');
@@ -238,12 +254,27 @@ async function analyzeVideo(row, apiKey) {
     db.prepare(`UPDATE videos SET visual_status = 'failed', visual_error = ?, visual_error_class = ?,
         visual_next_attempt_at = ? WHERE id = ? AND fingerprint = ? AND visual_status = 'running'`)
       .run(message, errorClass, retryAt, row.id, row.fingerprint);
+    if (authenticationFailure || providerConfigurationFailure || providerRateLimit || providerServerFailure || providerNetworkFailure) {
+      const status = message.match(/^OpenRouter HTTP (\d{3})\b/)?.[1];
+      const reason = authenticationFailure ? `OpenRouter HTTP ${status}: revisar clave/permisos`
+        : providerConfigurationFailure ? `OpenRouter HTTP ${status}: revisar endpoint/modelo/parámetros`
+          : providerRateLimit ? 'OpenRouter HTTP 429: cuota o límite de velocidad'
+            : providerServerFailure ? `OpenRouter HTTP ${status}: proveedor no disponible`
+              : 'Fallo de red al llamar al proveedor';
+      const cooldownAt = providerRateLimit || providerServerFailure || providerNetworkFailure
+        ? retryAt || new Date(Date.now() + baseDelaySeconds * 1000).toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, '')
+        : null;
+      setVisualProviderControl({
+        configurationFingerprint: providerConfigurationFingerprint(apiKey),
+        errorClass, reason, pausedUntil: cooldownAt
+      });
+    }
     setWorkerActivity('visual-analyzer', {
       phase: retryAt ? 'esperando reintento' : 'fallo sin reintento automático',
       videoId: row.id, path: row.relative_path, error: message
     });
     console.error(`Visual analysis failed for video ${row.id}: ${error.message}`);
-    if (authenticationFailure || providerRateLimit || providerServerFailure) throw error;
+    if (authenticationFailure || providerConfigurationFailure || providerRateLimit || providerServerFailure || providerNetworkFailure) throw error;
   }
   return true;
 }
@@ -256,6 +287,27 @@ async function runLocked() {
       visual_error_class = CASE WHEN visual_attempts >= ? THEN 'attempt_limit' ELSE 'worker_interrupted' END,
       visual_next_attempt_at = CASE WHEN visual_attempts >= ? THEN NULL ELSE datetime(CURRENT_TIMESTAMP, '+1 minute') END
     WHERE visual_status = 'running'`).run(MAX_VISUAL_ATTEMPTS, MAX_VISUAL_ATTEMPTS);
+  const configFingerprint = providerConfigurationFingerprint(apiKey);
+  const providerControl = getVisualProviderControl();
+  if (providerControl) {
+    if (providerControl.configuration_fingerprint !== configFingerprint) {
+      clearVisualProviderControl();
+      setWorkerActivity('visual-analyzer', { phase: 'proveedor reactivado', result: 'Cambió clave, modelo o endpoint; se retoma la cola' });
+    } else {
+      const pauseUntil = providerControl.paused_until
+        ? new Date(`${providerControl.paused_until.replace(' ', 'T')}Z`) : null;
+      if (!pauseUntil || pauseUntil.getTime() > Date.now()) {
+        const formattedUntil = pauseUntil ? pauseUntil.toISOString() : '';
+        setWorkerActivity('visual-analyzer', {
+          phase: providerControl.paused_until ? 'proveedor en espera' : 'proveedor pausado',
+          result: `${providerControl.reason}${formattedUntil ? ` · hasta ${formattedUntil}` : ' · cambiar clave, modelo o endpoint para reactivar'}`
+        });
+        console.log(`Visual provider paused: ${providerControl.reason}`);
+        return;
+      }
+      clearVisualProviderControl();
+    }
+  }
   const utcDay = new Date().toISOString().slice(0, 10);
   const usedToday = db.prepare('SELECT request_count FROM visual_daily_requests WHERE utc_day = ?').get(utcDay)?.request_count || 0;
   const dailyRemaining = MAX_VISUAL_REQUESTS_PER_DAY

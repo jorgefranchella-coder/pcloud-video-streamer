@@ -116,7 +116,9 @@ Ejemplo basado en la ejecución documentada, no respuesta fija. Las claves de es
 
 `worker_history` contiene las últimas diez ejecuciones de cada etapa, con ID, estado, inicio, heartbeat, fin y último resultado/error. SQLite conserva como máximo 200 ejecuciones por etapa.
 
-`visual_daily_budget` informa `utc_day`, solicitudes iniciadas, límite efectivo (`0` significa desactivado) y solicitudes restantes (`null` sin límite). El límite `MAX_VISUAL_REQUESTS_PER_DAY` se aplica antes de cada llamada al proveedor; el contador se persiste por fecha UTC en SQLite. Cuando se alcanza, las fichas no procesadas quedan pendientes para el próximo lote, que debe iniciarse manualmente después de las 00:00 UTC.
+`visual_daily_budget` informa `utc_day`, solicitudes iniciadas, límite efectivo (`0` significa desactivado) y solicitudes restantes (`null` sin límite). El límite `MAX_VISUAL_REQUESTS_PER_DAY` se aplica antes de cada llamada al proveedor; el contador se persiste por fecha UTC en SQLite. Cuando se alcanza, las fichas no procesadas quedan pendientes para un lote posterior. Si está habilitado `pcloud-video-visual.timer`, systemd lo intentará en el siguiente intervalo; de lo contrario, hay que iniciar el servicio manualmente después de las 00:00 UTC.
+
+`visual_provider_control` indica si el analizador quedó pausado por fallo de configuración o está esperando cuota/red/proveedor. Los errores permanentes exigen cambiar clave, modelo o endpoint para despejar la pausa; las esperas temporales informan `paused_until`. No expone credenciales ni el fingerprint de configuración.
 
 `visual_retry_wait` informa cuántos fallos tienen reintento pendiente y el próximo horario. Los errores transitorios usan espera exponencial hasta 24 horas; `429` comienza en cinco minutos y otros transitorios en un minuto. Cada fingerprint admite hasta `MAX_VISUAL_ATTEMPTS` intentos automáticos (por defecto cinco). Los errores `401`, `403` y otros `4xx` no reciben reintento automático. `RETRY_VISUAL_FAILED=1` es necesario para tomar fallos ya vencidos en una ejecución posterior.
 
