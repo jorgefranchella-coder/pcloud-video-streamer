@@ -73,6 +73,7 @@ let canEditPeopleDirectory = false;
 let searchTimer;
 let searchRequestId = 0;
 let treeRequestId = 0;
+let accessRenewalPromise = null;
 const SEARCH_PAGE_SIZE = 50;
 
 // API Base URL
@@ -130,13 +131,27 @@ async function establishAccessSession() {
   }
 }
 
+async function apiFetch(url, options = {}) {
+  const requestOptions = { credentials: 'same-origin', ...options };
+  const response = await fetch(url, requestOptions);
+  if (response.status !== 401) return response;
+
+  const result = await response.clone().json().catch(() => ({}));
+  if (result.error !== 'Authentication required') return response;
+  if (!accessRenewalPromise) {
+    accessRenewalPromise = establishAccessSession().finally(() => { accessRenewalPromise = null; });
+  }
+  if (!await accessRenewalPromise) return response;
+  return fetch(url, requestOptions);
+}
+
 let progressRequestInFlight = false;
 
 async function loadProcessProgress() {
   if (progressRequestInFlight) return;
   progressRequestInFlight = true;
   try {
-    const response = await fetch(`${API_BASE}/api/index/status`);
+    const response = await apiFetch(`${API_BASE}/api/index/status`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     renderProcessProgress(await response.json());
   } catch (error) {
@@ -397,7 +412,7 @@ async function searchVideos(query, offset, requestId, folder = isScopedFolderSea
     if (searchTo.value) params.set('to', searchTo.value);
     if (selectedPersonId) params.set('person_id', String(selectedPersonId));
     if (folder) params.set('folder', folder);
-    const response = await fetch(`${API_BASE}/api/search?${params}`);
+    const response = await apiFetch(`${API_BASE}/api/search?${params}`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
     if (requestId !== searchRequestId) return;
@@ -526,7 +541,7 @@ async function loadTree(path) {
   mobileFolderTree.innerHTML = '<div class="text-center text-gray-500 py-8">Cargando...</div>';
   
   try {
-    const response = await fetch(`${API_BASE}/api/list?path=${encodeURIComponent(path)}`);
+    const response = await apiFetch(`${API_BASE}/api/list?path=${encodeURIComponent(path)}`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
     if (requestId !== treeRequestId || path !== currentPath) return;
@@ -591,7 +606,7 @@ function createTreeButton(item, parentLi) {
 
 async function loadSubfolder(folderPath, parentLi, folderButton, requestId) {
   try {
-    const response = await fetch(`${API_BASE}/api/list?path=${encodeURIComponent(folderPath)}`);
+    const response = await apiFetch(`${API_BASE}/api/list?path=${encodeURIComponent(folderPath)}`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
     if (!parentLi.isConnected || folderButton.getAttribute('aria-expanded') !== 'true' ||
@@ -723,8 +738,8 @@ async function loadMetadata(relativePath) {
   visualMetadata.classList.add('hidden');
   try {
     const [response, peopleResponse] = await Promise.all([
-      fetch(`${API_BASE}/api/metadata?path=${encodeURIComponent(relativePath)}`),
-      fetch(`${API_BASE}/api/people`)
+      apiFetch(`${API_BASE}/api/metadata?path=${encodeURIComponent(relativePath)}`),
+      apiFetch(`${API_BASE}/api/people`)
     ]);
     if (selectedVideoPath !== relativePath) return;
     if (response.status === 404) {
@@ -769,7 +784,7 @@ async function saveObservationIdentity(observationIndex, assignment) {
   const token = tokenForEditing();
   if (!token) return false;
   try {
-    const response = await fetch(`${API_BASE}/api/metadata/person`, {
+    const response = await apiFetch(`${API_BASE}/api/metadata/person`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: JSON.stringify({ path: pathToEdit, analysis_revision: expectedRevision,
@@ -793,7 +808,7 @@ async function saveObservationIdentity(observationIndex, assignment) {
 
 async function openPeopleDirectory() {
   try {
-    const response = await fetch(`${API_BASE}/api/people`);
+    const response = await apiFetch(`${API_BASE}/api/people`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
     knownPeople = data.items || [];
@@ -904,7 +919,7 @@ async function renameDirectoryPerson(person) {
   const token = tokenForEditing();
   if (!token) return;
   try {
-    const response = await fetch(`${API_BASE}/api/people/${person.id}`, {
+    const response = await apiFetch(`${API_BASE}/api/people/${person.id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: JSON.stringify({ name: name.trim() })
@@ -937,7 +952,7 @@ async function mergeDirectoryPerson(source, targetId) {
   const token = tokenForEditing();
   if (!token) return;
   try {
-    const response = await fetch(`${API_BASE}/api/people/${source.id}/merge`, {
+    const response = await apiFetch(`${API_BASE}/api/people/${source.id}/merge`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: JSON.stringify({ target_person_id: target.id })
@@ -991,7 +1006,7 @@ async function undoDirectoryMerge(merge) {
   const token = tokenForEditing();
   if (!token) return;
   try {
-    const response = await fetch(`${API_BASE}/api/people/merges/${merge.id}/undo`, {
+    const response = await apiFetch(`${API_BASE}/api/people/merges/${merge.id}/undo`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` }
     });
@@ -1054,7 +1069,7 @@ function renderIdentityAssignments(item) {
           const token = tokenForEditing();
           if (!token) return;
           try {
-            const response = await fetch(`${API_BASE}/api/metadata/person/review-stale`, {
+            const response = await apiFetch(`${API_BASE}/api/metadata/person/review-stale`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
               body: JSON.stringify({ path: pathToReview,
