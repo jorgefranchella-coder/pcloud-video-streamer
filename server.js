@@ -150,7 +150,8 @@ app.use('/api', (req, res, next) => {
 
 // Helper: safely resolve path within VIDEO_ROOT
 function safeResolve(requestedPath) {
-  if (typeof requestedPath !== 'string' || path.isAbsolute(requestedPath)) return null;
+  if (typeof requestedPath !== 'string' || requestedPath.length > 4096
+    || requestedPath.includes('\0') || path.isAbsolute(requestedPath)) return null;
   const resolved = path.resolve(ROOT_RESOLVED, requestedPath);
   const relative = path.relative(ROOT_RESOLVED, resolved);
   if (relative === '..' || relative.startsWith(`..${path.sep}`)) return null;
@@ -160,7 +161,7 @@ function safeResolve(requestedPath) {
     const realRelative = path.relative(realRoot, realPath);
     if (realRelative === '..' || realRelative.startsWith(`..${path.sep}`)) return null;
   } catch (error) {
-    if (error.code !== 'ENOENT') throw error;
+    if (!['ENOENT', 'ENOTDIR', 'ELOOP', 'EINVAL', 'ENAMETOOLONG', 'ERR_INVALID_ARG_VALUE'].includes(error.code)) throw error;
   }
   return resolved;
 }
