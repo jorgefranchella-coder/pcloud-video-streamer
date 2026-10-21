@@ -3,16 +3,18 @@ const path = require('path');
 const crypto = require('crypto');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
-const { db, buildVisualSearchText, withJobLock } = require('./metadata-store');
+const { db, buildVisualSearchText, withJobLock, setWorkerConfiguration } = require('./metadata-store');
+const { visualConfiguration } = require('./config');
 
 const execFileAsync = promisify(execFile);
 const VIDEO_ROOT = path.resolve(process.env.VIDEO_ROOT || '/mnt/pcloud/My Videos');
-const MODEL = process.env.OPENROUTER_MODEL || 'openrouter/free';
+const CONFIG = visualConfiguration();
+const MODEL = CONFIG.visual_model;
 const API_URL = process.env.OPENROUTER_API_URL || 'https://openrouter.ai/api/v1/chat/completions';
 const PROMPT_VERSION = 'visual-v2';
-const MAX_VISUAL = Math.min(Math.max(Number.parseInt(process.env.MAX_VISUAL || '1', 10) || 1, 1), 100);
-const RETRY_FAILED = process.env.RETRY_VISUAL_FAILED === '1';
-const TARGET_ID = Number.parseInt(process.env.VISUAL_VIDEO_ID || '', 10);
+const MAX_VISUAL = CONFIG.max_visual;
+const RETRY_FAILED = CONFIG.retry_visual_failed;
+const TARGET_ID = CONFIG.visual_video_id;
 
 const evidenceItem = {
   type: 'object',
@@ -212,7 +214,13 @@ async function runLocked() {
 }
 
 function run() {
-  return withJobLock('visual-analyzer', runLocked);
+  return withJobLock('visual-analyzer', () => {
+    setWorkerConfiguration('visual', {
+      model: MODEL, max_visual: MAX_VISUAL, retry_failed: RETRY_FAILED,
+      video_id: Number.isInteger(TARGET_ID) ? TARGET_ID : null
+    });
+    return runLocked();
+  });
 }
 
 if (require.main === module) {

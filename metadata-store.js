@@ -54,6 +54,11 @@ db.exec(`CREATE TABLE IF NOT EXISTS process_locks (
   owner_host TEXT NOT NULL,
   acquired_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 )`);
+db.exec(`CREATE TABLE IF NOT EXISTS worker_configuration (
+  worker TEXT PRIMARY KEY,
+  configuration_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+)`);
 
 function withJobLock(name, operation) {
   const token = crypto.randomUUID();
@@ -231,12 +236,21 @@ function status() {
   const scan = db.prepare('SELECT * FROM scans ORDER BY id DESC LIMIT 1').get();
   const visualCounts = db.prepare("SELECT COALESCE(visual_status, 'pending') AS status, COUNT(*) AS count FROM videos WHERE status != 'missing' GROUP BY COALESCE(visual_status, 'pending')").all();
   const visualReadyCounts = db.prepare("SELECT COALESCE(visual_status, 'pending') AS status, COUNT(*) AS count FROM videos WHERE status = 'done' GROUP BY COALESCE(visual_status, 'pending')").all();
+  const workerConfiguration = Object.fromEntries(db.prepare('SELECT worker, configuration_json, updated_at FROM worker_configuration')
+    .all().map(row => [row.worker, { ...JSON.parse(row.configuration_json), updated_at: row.updated_at }]));
   return {
     counts: Object.fromEntries(counts.map(row => [row.status, row.count])),
     visual_counts: Object.fromEntries(visualCounts.map(row => [row.status, row.count])),
     visual_ready_counts: Object.fromEntries(visualReadyCounts.map(row => [row.status, row.count])),
-    last_scan: scan || null
+    last_scan: scan || null,
+    worker_configuration: workerConfiguration
   };
+}
+
+function setWorkerConfiguration(worker, configuration) {
+  db.prepare(`INSERT INTO worker_configuration (worker, configuration_json) VALUES (?, ?)
+    ON CONFLICT(worker) DO UPDATE SET configuration_json = excluded.configuration_json, updated_at = CURRENT_TIMESTAMP`)
+    .run(worker, JSON.stringify(configuration));
 }
 
 function search({ query, from, to, limit, offset }) {
@@ -358,5 +372,5 @@ function setVideoPerson({ relativePath, observationIndex, personId, personName }
 module.exports = {
   db, getByPath, getById, upsert, parseVideo, status, search, buildVisualSearchText,
   setConfirmedPeople, listPeople, identifiedPeopleForVideo, staleIdentificationsForVideo,
-  setVideoPerson, withJobLock
+  setVideoPerson, withJobLock, setWorkerConfiguration
 };

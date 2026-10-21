@@ -17,7 +17,7 @@ Errores comunes de edición: `503` si no se configuró el token, `401` si no coi
 | `GET /api/list` | `path` opcional, raíz por defecto; lista carpetas y extensiones reconocidas |
 | `GET /api/stream` | `path` obligatorio; entrega archivo, acepta rango simple |
 | `GET /api/metadata` | `path` obligatorio; ficha del índice |
-| `GET /api/index/status` | Conteos y último recorrido |
+| `GET /api/index/status` | Conteos, último recorrido y configuración efectiva no secreta registrada por cada trabajador |
 | `GET /api/search` | `q`, `from`, `to`, `limit`, `offset` |
 | `GET /api/people` | Catálogo de nombres y cantidades |
 | `PUT /api/metadata/person` | Asociación de una observación con un nombre |
@@ -78,6 +78,8 @@ Las listas `visual_people`, `visual_events` y `visual_date_clues` contienen obje
 
 ## Progreso
 
+`GET /api/index/status` incluye `worker_configuration.technical` y `worker_configuration.visual` después de que cada etapa haya iniciado. Incluye los límites efectivos, flags de reintento, modo puntual/modelo visual y hora del registro; nunca incluye `OPENROUTER_API_KEY` ni `METADATA_EDIT_TOKEN`.
+
 `GET /api/index/status` devuelve:
 
 ```json
@@ -104,6 +106,8 @@ Ejemplo basado en la ejecución documentada, no respuesta fija. Las claves de es
 - Timestamps de SQLite: UTC, en texto sin sufijo de zona. La interfaz los interpreta como UTC y los muestra en hora local.
 
 No se exponen PID, estado de systemd, archivo actualmente procesado, próxima ejecución ni historial de lotes visuales.
+
+`worker_configuration` registra la última configuración no secreta usada por cada etapa (`technical` y `visual`), además de `updated_at`. Si una etapa nunca inició, su entrada no existe. No representa un proceso vivo ni lee cambios posteriores en los archivos de entorno hasta el siguiente arranque.
 
 ## Búsqueda
 
@@ -137,7 +141,7 @@ Respuesta `{ "items": [...], "limit": 50, "offset": 0 }`. Cada item incluye ID, 
 }
 ```
 
-`appearances` cuenta asociaciones, no personas detectadas de forma independiente. Dos observaciones del mismo individuo en un video cuentan como dos apariciones y un video. El catálogo puede incluir nombres sin asociaciones. La consulta actual no excluye asociaciones a videos `missing`.
+`appearances` cuenta asociaciones activas de la revisión vigente, no personas detectadas de forma independiente. Dos observaciones del mismo individuo en un video cuentan como dos apariciones y un video. El catálogo puede incluir nombres sin asociaciones; los videos `missing` no suman al conteo.
 
 `PUT /api/metadata/person` recibe uno de estos cuerpos:
 

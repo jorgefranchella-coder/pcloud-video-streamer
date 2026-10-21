@@ -56,6 +56,7 @@ const visualProgressLabel = document.getElementById('visualProgressLabel');
 const visualProgressDetail = document.getElementById('visualProgressDetail');
 const visualProgressBar = document.getElementById('visualProgressBar');
 const scanProgressStatus = document.getElementById('scanProgressStatus');
+const effectiveConfiguration = document.getElementById('effectiveConfiguration');
 let selectedVideoPath = null;
 let editToken = null;
 let knownPeople = [];
@@ -129,6 +130,24 @@ function renderProcessProgress(status) {
     `${format(visual.failed)} con error`,
     count(technical.pending) ? `${format(technical.pending)} esperando inventario técnico` : ''
   ].filter(Boolean).join(' · ');
+
+  const configured = status.worker_configuration || {};
+  const settings = [];
+  if (configured.technical) {
+    const effective = configured.technical;
+    const batch = effective.max_probes === 0 ? 'sin límite' : `lote ${format(effective.max_probes)}`;
+    settings.push(effective.inventory_only
+      ? 'Técnico: solo inventario'
+      : `Técnico: ${batch}, timeout ${format(effective.probe_timeout_ms / 1000)} s, reintentos ${effective.retry_failed ? 'activos' : 'desactivados'}`);
+  }
+  if (configured.visual) {
+    const effective = configured.visual;
+    const target = effective.video_id ? ` · video puntual ${effective.video_id}` : '';
+    settings.push(`Visual: ${effective.model}, lote ${format(effective.max_visual)}, reintentos ${effective.retry_failed ? 'activos' : 'desactivados'}${target}`);
+  }
+  effectiveConfiguration.textContent = settings.length
+    ? `Configuración efectiva de la última ejecución: ${settings.join(' · ')}`
+    : 'Configuración efectiva: se mostrará después de la primera ejecución de cada proceso.';
 
   const scan = status.last_scan;
   scanProgressStatus.classList.add('hidden');
