@@ -407,14 +407,23 @@ async function searchVideos(query, offset, requestId, folder = isScopedFolderSea
     breadcrumbs.classList.add('hidden');
   } catch (error) {
     if (requestId === searchRequestId) {
-      folderTree.textContent = `Error al buscar: ${error.message}`;
-      mobileFolderTree.textContent = `Error al buscar: ${error.message}`;
+      if (offset === 0) {
+        folderTree.textContent = `Error al buscar: ${error.message}`;
+        mobileFolderTree.textContent = `Error al buscar: ${error.message}`;
+      } else {
+        document.querySelectorAll('.search-more button').forEach(button => {
+          button.dataset.loading = 'false';
+          button.setAttribute('aria-disabled', 'false');
+          button.textContent = 'Reintentar carga de resultados';
+        });
+      }
       searchStatus.textContent = `No se pudo completar la búsqueda: ${error.message}`;
     }
   }
 }
 
 function renderSearchResults(items, container, query, offset, requestId, folder, hasMore) {
+  const restoreFocus = offset > 0 && container.contains(document.activeElement);
   if (offset === 0) container.replaceChildren();
   container.querySelector('.search-more')?.remove();
   if (!items.length && offset === 0) {
@@ -451,11 +460,17 @@ function renderSearchResults(items, container, query, offset, requestId, folder,
     button.className = 'w-full px-3 py-2 text-left text-sm text-blue-300 hover:text-white';
     button.textContent = 'Ver más resultados';
     button.addEventListener('click', () => {
-      document.querySelectorAll('.search-more').forEach(element => element.remove());
+      if (button.dataset.loading === 'true') return;
+      button.dataset.loading = 'true';
+      button.setAttribute('aria-disabled', 'true');
+      button.textContent = 'Cargando más resultados…';
       searchVideos(query, offset + items.length, requestId, folder);
     });
     more.appendChild(button);
     list.appendChild(more);
+    if (restoreFocus) button.focus();
+  } else if (restoreFocus) {
+    (list.children[offset]?.querySelector('button') || list.querySelector('li:not(.search-more) button'))?.focus();
   }
 }
 
