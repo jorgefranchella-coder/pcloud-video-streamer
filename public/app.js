@@ -979,10 +979,20 @@ function renderIdentityAssignments(item) {
       }
       if (observations.length && item.can_edit_people) {
         const controls = document.createElement('div');
-        controls.className = 'mt-2 flex flex-col gap-2 sm:flex-row';
+        controls.className = 'mt-2 flex flex-col gap-2';
+        const identitySelect = document.createElement('select');
+        identitySelect.className = 'w-full rounded border border-amber-800 bg-gray-900 px-2 py-2 text-sm text-white';
+        identitySelect.setAttribute('aria-label', `Elegir identidad para la observación anterior de ${previous.name}`);
+        for (const person of knownPeople) {
+          const option = document.createElement('option');
+          option.value = String(person.id);
+          option.textContent = person.name;
+          identitySelect.appendChild(option);
+        }
+        identitySelect.value = String(previous.person_id);
         const select = document.createElement('select');
         select.className = 'min-w-0 flex-1 rounded border border-amber-800 bg-gray-900 px-2 py-2 text-sm text-white';
-        select.setAttribute('aria-label', `Elegir observación actual para reasignar a ${previous.name}`);
+        select.setAttribute('aria-label', `Elegir observación actual para vincular con ${previous.name}`);
         const placeholder = document.createElement('option');
         placeholder.value = '';
         placeholder.textContent = 'Elegí una observación de la ficha actual…';
@@ -998,12 +1008,14 @@ function renderIdentityAssignments(item) {
         apply.className = 'rounded bg-amber-700 px-3 py-2 text-sm hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-50';
         apply.textContent = 'Reasignar';
         apply.disabled = true;
-        select.addEventListener('change', () => { apply.disabled = select.value === ''; });
+        const updateApplyState = () => { apply.disabled = select.value === '' || identitySelect.value === ''; };
+        select.addEventListener('change', updateApplyState);
+        identitySelect.addEventListener('change', updateApplyState);
         apply.addEventListener('click', async () => {
           if (select.value === '') return;
           apply.disabled = true;
           const saved = await saveObservationIdentity(Number(select.value), {
-            person_id: previous.person_id,
+            person_id: Number(identitySelect.value),
             stale_observation: {
               analysis_revision: previous.analysis_revision,
               observation_index: previous.observation_index
@@ -1011,7 +1023,7 @@ function renderIdentityAssignments(item) {
           });
           if (!saved) apply.disabled = false;
         });
-        controls.append(select, apply);
+        controls.append(identitySelect, select, apply);
         entry.appendChild(controls);
       }
       list.appendChild(entry);
@@ -1031,7 +1043,9 @@ function renderIdentityAssignments(item) {
     list.className = 'mt-2 max-h-48 space-y-2 overflow-y-auto text-xs text-gray-400';
     for (const change of history) {
       const entry = document.createElement('li');
-      const from = change.previous_name || 'Sin identificar';
+      const from = change.action === 'reconciled'
+        ? `Ficha anterior: ${change.stale_person_name || 'Sin identificar'}; observación actual: ${change.previous_name || 'Sin identificar'}`
+        : change.previous_name || 'Sin identificar';
       const to = change.person_name || 'Sin identificar';
       const action = change.action === 'reconciled' ? 'Reconciliada'
         : change.action === 'assigned' ? 'Identificada'

@@ -270,6 +270,7 @@ db.exec(`
     previous_name TEXT,
     person_id INTEGER,
     person_name TEXT,
+    stale_person_name TEXT,
     action TEXT NOT NULL,
     stale_revision TEXT,
     stale_observation_index INTEGER,
@@ -300,6 +301,7 @@ if (identityHistorySchema.includes('CHECK (action IN')) {
         previous_name TEXT,
         person_id INTEGER,
         person_name TEXT,
+        stale_person_name TEXT,
         action TEXT NOT NULL,
         stale_revision TEXT,
         stale_observation_index INTEGER,
@@ -316,6 +318,10 @@ if (identityHistorySchema.includes('CHECK (action IN')) {
         ON video_person_identity_history(video_id, id DESC);`);
   });
   migrateIdentityHistory.immediate();
+}
+const identityHistoryColumns = new Set(db.prepare('PRAGMA table_info(video_person_identity_history)').all().map(column => column.name));
+if (!identityHistoryColumns.has('stale_person_name')) {
+  db.exec('ALTER TABLE video_person_identity_history ADD COLUMN stale_person_name TEXT');
 }
 
 db.prepare(`UPDATE videos SET visual_revision = 'legacy:' || id || ':' || fingerprint
@@ -740,7 +746,7 @@ function staleIdentificationsForVideo(videoId) {
 
 function identityHistoryForVideo(videoId) {
   return db.prepare(`SELECT id, analysis_revision, observation_index, previous_name, person_name,
-      action, stale_revision, stale_observation_index, changed_at
+      stale_person_name, action, stale_revision, stale_observation_index, changed_at
     FROM video_person_identity_history WHERE video_id = ? ORDER BY id DESC LIMIT 100`).all(videoId);
 }
 
@@ -782,6 +788,7 @@ function setVideoPerson({ relativePath, observationIndex, personId, personName, 
       FROM video_person_observations JOIN people ON people.id = video_person_observations.person_id
       WHERE video_id = ? AND analysis_revision = ? AND observation_index = ?`)
       .get(row.id, row.visual_revision, observationIndex);
+    let stalePersonName = null;
     if (personName) {
       const name = personName.trim().replace(/\s+/g, ' ');
       if (!name || name.length > 80) throw new Error('El nombre debe tener entre 1 y 80 caracteres');
@@ -805,10 +812,17 @@ function setVideoPerson({ relativePath, observationIndex, personId, personName, 
 
     if (staleObservation) {
       if (personId == null) throw new Error('Reconciliar una observación anterior requiere una persona asignada');
-      const reviewed = db.prepare(`UPDATE video_person_observations SET reviewed_at = CURRENT_TIMESTAMP
-        WHERE video_id = ? AND analysis_revision = ? AND observation_index = ? AND person_id = ?
+      const staleIdentity = db.prepare(`SELECT people.name FROM video_person_observations
+        JOIN people ON people.id = video_person_observations.person_id
+        WHERE video_id = ? AND analysis_revision = ? AND observation_index = ?
           AND analysis_revision != ? AND reviewed_at IS NULL`)
-        .run(row.id, staleObservation.analysisRevision, staleObservation.observationIndex, personId, row.visual_revision);
+        .get(row.id, staleObservation.analysisRevision, staleObservation.observationIndex, row.visual_revision);
+      if (!staleIdentity) throw new Error('La asignación anterior ya no está pendiente de revisión');
+      stalePersonName = staleIdentity.name;
+      const reviewed = db.prepare(`UPDATE video_person_observations SET reviewed_at = CURRENT_TIMESTAMP
+        WHERE video_id = ? AND analysis_revision = ? AND observation_index = ?
+          AND analysis_revision != ? AND reviewed_at IS NULL`)
+        .run(row.id, staleObservation.analysisRevision, staleObservation.observationIndex, row.visual_revision);
       if (reviewed.changes !== 1) throw new Error('La asignación anterior ya no está pendiente de revisión');
     }
 
@@ -818,11 +832,11 @@ function setVideoPerson({ relativePath, observationIndex, personId, personName, 
         : personId == null ? 'removed' : previous ? 'changed' : 'assigned';
       db.prepare(`INSERT INTO video_person_identity_history
         (video_id, analysis_revision, observation_index, previous_person_id, previous_name,
-         person_id, person_name, action, stale_revision, stale_observation_index)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+         person_id, person_name, action, stale_revision, stale_observation_index, stale_person_name)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .run(row.id, row.visual_revision, observationIndex, previous?.person_id ?? null, previous?.name ?? null,
           nextPerson?.id ?? null, nextPerson?.name ?? null, action,
-          staleObservation?.analysisRevision ?? null, staleObservation?.observationIndex ?? null);
+          staleObservation?.analysisRevision ?? null, staleObservation?.observationIndex ?? null, stalePersonName);
     }
 
     const assignedNames = db.prepare(`SELECT people.name FROM video_person_observations
