@@ -18,7 +18,7 @@ Errores comunes de edición: `503` si no se configuró el token, `401` si no coi
 | `POST /api/access/session` | Recibe `{ "token": "..." }` y establece cookie HttpOnly |
 | `DELETE /api/access/session` | Elimina la cookie de sesión |
 | `GET /api/list` | `path` opcional, raíz por defecto; lista carpetas y extensiones reconocidas |
-| `GET /api/stream` | `path` obligatorio; entrega archivo, acepta rango simple |
+| `GET /api/stream` | `path` obligatorio y extensión de video reconocida; entrega archivo y acepta rango simple |
 | `GET /api/metadata` | `path` obligatorio; ficha del índice |
 | `GET /api/metadata/evidence` | `path`, `revision`, `at_seconds`; JPEG de evidencia activa o de una identidad anterior pendiente |
 | `GET /api/index/status` | Conteos, último recorrido y configuración efectiva no secreta registrada por cada trabajador |

@@ -471,9 +471,10 @@ function pipeFileStream(fullPath, options, res) {
 // GET /api/stream?path=relative/path - Stream video with Range Requests
 app.get('/api/stream', async (req, res) => {
   const relativePath = req.query.path;
-  if (!relativePath) {
+  if (typeof relativePath !== 'string' || !relativePath) {
     return res.status(400).json({ error: 'Missing path parameter' });
   }
+  if (!isVideoFile(relativePath)) return res.status(400).json({ error: 'Unsupported video file type' });
   
   const fullPath = safeResolve(relativePath);
   if (!fullPath) {
