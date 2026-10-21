@@ -576,23 +576,32 @@ function buildVisualSearchText({ events, people, places, keywords, dateClues, co
   ].join(' ');
 }
 
-function setConfirmedPeople(relativePath, names) {
-  const row = getByPath.get(relativePath);
-  if (!row) return false;
-  const assignedNames = db.prepare(`SELECT people.name FROM video_person_observations
-    JOIN people ON people.id = video_person_observations.person_id
-    WHERE video_id = ? AND analysis_revision = ?`).all(row.id, row.visual_revision).map(item => item.name);
-  const searchText = buildVisualSearchText({
-    events: JSON.parse(row.visual_events_json),
-    people: JSON.parse(row.visual_people_json),
-    places: JSON.parse(row.visual_places_json),
-    keywords: JSON.parse(row.visual_keywords_json),
-    dateClues: JSON.parse(row.visual_date_clues_json),
-    confirmedPeople: [...names, ...assignedNames]
+function setConfirmedPeople(relativePath, expectedRevision, names) {
+  if (typeof expectedRevision !== 'string' || !expectedRevision || expectedRevision.length > 200) return false;
+  const update = db.transaction(() => {
+    const row = getByPath.get(relativePath);
+    if (!row) return false;
+    if (row.visual_revision !== expectedRevision) {
+      const error = new Error('La ficha cambió desde que la abriste. Recargá y volvé a intentar.');
+      error.code = 'STALE_VISUAL_REVISION';
+      throw error;
+    }
+    const assignedNames = db.prepare(`SELECT people.name FROM video_person_observations
+      JOIN people ON people.id = video_person_observations.person_id
+      WHERE video_id = ? AND analysis_revision = ?`).all(row.id, row.visual_revision).map(item => item.name);
+    const searchText = buildVisualSearchText({
+      events: JSON.parse(row.visual_events_json),
+      people: JSON.parse(row.visual_people_json),
+      places: JSON.parse(row.visual_places_json),
+      keywords: JSON.parse(row.visual_keywords_json),
+      dateClues: JSON.parse(row.visual_date_clues_json),
+      confirmedPeople: [...names, ...assignedNames]
+    });
+    db.prepare(`UPDATE videos SET confirmed_people_json = ?, visual_search_text = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND visual_revision = ?`).run(JSON.stringify(names), searchText, row.id, expectedRevision);
+    return true;
   });
-  db.prepare('UPDATE videos SET confirmed_people_json = ?, visual_search_text = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
-    .run(JSON.stringify(names), searchText, row.id);
-  return true;
+  return update.immediate();
 }
 
 function listPeople() {
@@ -784,13 +793,19 @@ function dismissStaleIdentification({ relativePath, analysisRevision, observatio
   return dismiss.immediate();
 }
 
-function setVideoPerson({ relativePath, observationIndex, personId, personName, staleObservation }) {
-  const row = getByPath.get(relativePath);
-  if (!row || !Number.isInteger(observationIndex) || observationIndex < 0) return false;
-  const observations = JSON.parse(row.visual_people_json);
-  if (row.visual_status !== 'done' || !row.visual_revision || observationIndex >= observations.length) return false;
-
+function setVideoPerson({ relativePath, expectedRevision, observationIndex, personId, personName, staleObservation }) {
+  if (typeof expectedRevision !== 'string' || !expectedRevision || expectedRevision.length > 200 ||
+      !Number.isInteger(observationIndex) || observationIndex < 0) return false;
   const assign = db.transaction(() => {
+    const row = getByPath.get(relativePath);
+    if (!row || !Number.isInteger(observationIndex) || observationIndex < 0) return false;
+    if (row.visual_revision !== expectedRevision) {
+      const error = new Error('La ficha cambió desde que la abriste. Recargá y volvé a intentar.');
+      error.code = 'STALE_VISUAL_REVISION';
+      throw error;
+    }
+    const observations = JSON.parse(row.visual_people_json);
+    if (row.visual_status !== 'done' || !row.visual_revision || observationIndex >= observations.length) return false;
     const previous = db.prepare(`SELECT video_person_observations.person_id, people.name
       FROM video_person_observations JOIN people ON people.id = video_person_observations.person_id
       WHERE video_id = ? AND analysis_revision = ? AND observation_index = ?`)

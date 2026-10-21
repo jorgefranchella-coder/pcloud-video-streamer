@@ -62,6 +62,7 @@ const visualProgressBar = document.getElementById('visualProgressBar');
 const scanProgressStatus = document.getElementById('scanProgressStatus');
 const effectiveConfiguration = document.getElementById('effectiveConfiguration');
 let selectedVideoPath = null;
+let selectedMetadataRevision = null;
 let playbackRequestId = 0;
 let selectedPersonId = null;
 let editToken = null;
@@ -635,6 +636,7 @@ function playVideo(relativePath, name, seekToSeconds = null) {
 
 async function loadMetadata(relativePath) {
   metadataPanel.classList.remove('hidden');
+  selectedMetadataRevision = null;
   metadataStatus.textContent = 'Cargando ficha...';
   metadataDuration.textContent = '';
   metadataResolution.textContent = '';
@@ -658,6 +660,7 @@ async function loadMetadata(relativePath) {
     const item = await response.json();
     if (peopleResponse.ok) knownPeople = (await peopleResponse.json()).items || [];
     if (selectedVideoPath !== relativePath) return;
+    selectedMetadataRevision = item.visual_revision || null;
     metadataStatus.textContent = {
       pending: 'Pendiente de análisis técnico',
       failed: 'Error al leer el archivo',
@@ -686,17 +689,23 @@ function tokenForEditing() {
 
 async function saveObservationIdentity(observationIndex, assignment) {
   const pathToEdit = selectedVideoPath;
-  if (!pathToEdit) return false;
+  const expectedRevision = selectedMetadataRevision;
+  if (!pathToEdit || !expectedRevision) return false;
   const token = tokenForEditing();
   if (!token) return false;
   try {
     const response = await fetch(`${API_BASE}/api/metadata/person`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ path: pathToEdit, observation_index: observationIndex, ...assignment })
+      body: JSON.stringify({ path: pathToEdit, analysis_revision: expectedRevision,
+        observation_index: observationIndex, ...assignment })
     });
     if (response.status === 401) editToken = null;
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    if (!response.ok) {
+      const result = await response.json().catch(() => ({}));
+      if (response.status === 409 && selectedVideoPath === pathToEdit) await loadMetadata(pathToEdit);
+      throw new Error(result.error || `HTTP ${response.status}`);
+    }
     const result = await response.json();
     knownPeople = result.people || knownPeople;
     if (selectedVideoPath === pathToEdit) await loadMetadata(pathToEdit);

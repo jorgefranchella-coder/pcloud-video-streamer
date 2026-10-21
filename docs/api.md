@@ -178,19 +178,19 @@ Respuesta `{ "items": [...], "limit": 50, "offset": 0 }`. Cada item incluye ID, 
 `PUT /api/metadata/person` recibe uno de estos cuerpos:
 
 ```json
-{ "path": "Familia/clip.mp4", "observation_index": 0, "person_name": "Jorge" }
+{ "path": "Familia/clip.mp4", "analysis_revision": "revision-actual", "observation_index": 0, "person_name": "Jorge" }
 ```
 
 ```json
-{ "path": "Familia/clip.mp4", "observation_index": 0, "person_id": 7 }
+{ "path": "Familia/clip.mp4", "analysis_revision": "revision-actual", "observation_index": 0, "person_id": 7 }
 ```
 
 ```json
-{ "path": "Familia/clip.mp4", "observation_index": 0, "person_id": null }
+{ "path": "Familia/clip.mp4", "analysis_revision": "revision-actual", "observation_index": 0, "person_id": null }
 ```
 
-El primer caso crea o reutiliza un nombre; el segundo asigna uno existente; el tercero quita la asignación. Usar una sola modalidad por petición: si se envía un nombre no vacío junto con ID, la lógica del nombre tiene precedencia. El índice comienza en cero, debe ser entero y existir en una ficha visual `done`. El nombre se normaliza quitando espacios extremos y repetidos y admite hasta 80 caracteres.
+El primer caso crea o reutiliza un nombre; el segundo asigna uno existente; el tercero quita la asignación. Usar una sola modalidad por petición: si se envía un nombre no vacío junto con ID, la lógica del nombre tiene precedencia. `analysis_revision` debe coincidir con la revisión actual que devolvió `GET /api/metadata`; si la ficha cambió, devuelve `409` y no guarda la asignación. El índice comienza en cero, debe ser entero y existir en una ficha visual `done`. El nombre se normaliza quitando espacios extremos y repetidos y admite hasta 80 caracteres.
 
 Respuesta `{ "person": { "id": 7, "name": "Jorge" }, "people": [...] }`; al quitar una asignación, `person` es `null`. Persona desconocida: `400`; video/observación no disponible: `404`. Crear un nombre no asigna automáticamente el resto de sus apariciones.
 
-`PATCH /api/metadata/people` acepta `{ "path": "Familia/clip.mp4", "names": ["Jorge"] }`, hasta 20 nombres de 1–80 caracteres, y devuelve `{ "names": [...] }`. Reemplaza la lista general; no crea filas en el catálogo ni asignaciones por observación. Al reconstruir el texto FTS conserva también los nombres de las asignaciones por observación, para que estas no desaparezcan de la búsqueda.
+`PATCH /api/metadata/people` acepta `{ "path": "Familia/clip.mp4", "analysis_revision": "revision-actual", "names": ["Jorge"] }`, hasta 20 nombres de 1–80 caracteres, y devuelve `{ "names": [...] }`. `analysis_revision` debe coincidir con la ficha actual; una revisión desactualizada devuelve `409`. Reemplaza la lista general; no crea filas en el catálogo ni asignaciones por observación. Al reconstruir el texto FTS conserva también los nombres de las asignaciones por observación, para que estas no desaparezcan de la búsqueda.

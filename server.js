@@ -364,9 +364,11 @@ function authorizeMetadataEdit(req, res) {
 
 app.put('/api/metadata/person', (req, res) => {
   if (!authorizeMetadataEdit(req, res)) return;
-  const { path: relativePath, observation_index: observationIndex, person_id: personId, person_name: personName } = req.body || {};
+  const { path: relativePath, analysis_revision: expectedRevision,
+    observation_index: observationIndex, person_id: personId, person_name: personName } = req.body || {};
   const stale = req.body?.stale_observation;
   if (typeof relativePath !== 'string' || !safeResolve(relativePath) ||
+      typeof expectedRevision !== 'string' || !expectedRevision || expectedRevision.length > 200 ||
       !Number.isInteger(observationIndex) || observationIndex < 0 ||
       (personId != null && !Number.isInteger(personId)) ||
       (personName != null && (typeof personName !== 'string' || personName.trim().length > 80)) ||
@@ -376,7 +378,7 @@ app.put('/api/metadata/person', (req, res) => {
   }
   try {
     const person = metadata.setVideoPerson({
-      relativePath, observationIndex, personId, personName,
+      relativePath, expectedRevision, observationIndex, personId, personName,
       staleObservation: stale ? {
         analysisRevision: stale.analysis_revision,
         observationIndex: stale.observation_index
@@ -385,6 +387,7 @@ app.put('/api/metadata/person', (req, res) => {
     if (person === false) return res.status(404).json({ error: 'Video or observation not found' });
     res.json({ person, people: metadata.listPeople() });
   } catch (error) {
+    if (error.code === 'STALE_VISUAL_REVISION') return res.status(409).json({ error: error.message });
     res.status(400).json({ error: error.message });
   }
 });
@@ -409,16 +412,24 @@ app.post('/api/metadata/person/review-stale', (req, res) => {
 app.patch('/api/metadata/people', (req, res) => {
   if (!authorizeMetadataEdit(req, res)) return;
   const relativePath = req.body?.path;
+  const expectedRevision = req.body?.analysis_revision;
   const names = req.body?.names;
-  if (!relativePath || !safeResolve(relativePath) || !Array.isArray(names) || names.length > 20 ||
+  if (typeof relativePath !== 'string' || !safeResolve(relativePath) ||
+      typeof expectedRevision !== 'string' || !expectedRevision || expectedRevision.length > 200 ||
+      !Array.isArray(names) || names.length > 20 ||
       names.some(name => typeof name !== 'string' || name.trim().length < 1 || name.trim().length > 80)) {
-    return res.status(400).json({ error: 'Invalid path or names' });
+    return res.status(400).json({ error: 'Invalid path, revision, or names' });
   }
   const uniqueNames = [...new Set(names.map(name => name.trim()))];
-  if (!metadata.setConfirmedPeople(relativePath, uniqueNames)) {
-    return res.status(404).json({ error: 'Video not indexed' });
+  try {
+    if (!metadata.setConfirmedPeople(relativePath, expectedRevision, uniqueNames)) {
+      return res.status(404).json({ error: 'Video not indexed' });
+    }
+    res.json({ names: uniqueNames });
+  } catch (error) {
+    if (error.code === 'STALE_VISUAL_REVISION') return res.status(409).json({ error: error.message });
+    res.status(400).json({ error: error.message });
   }
-  res.json({ names: uniqueNames });
 });
 
 // GET /api/list?path=relative/path - List directory contents
