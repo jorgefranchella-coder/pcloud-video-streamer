@@ -7,11 +7,13 @@ Wants=network-online.target rclone-pcloud.service
 Type=simple
 User=jorge
 Group=jorge
-WorkingDirectory=/home/jorge/orca/workspaces/Video-Home/Versión-inicial
+WorkingDirectory=/home/jorge/orca/workspaces/Video-Home/meta-data-videos
 Environment="VIDEO_ROOT=/mnt/pcloud/My Videos"
+Environment="DATA_DIR=/home/jorge/orca/workspaces/Video-Home/meta-data-videos/data"
 Environment=PORT=3001
 Environment=NODE_ENV=production
-ExecStart=/usr/bin/node server.js
+EnvironmentFile=-/etc/pcloud-video-metadata.env
+ExecStart=/home/jorge/.hermes/node/bin/node server.js
 Restart=always
 RestartSec=10
 StartLimitInterval=60

@@ -1,3 +1,5 @@
+> **Documento histórico de planificación.** Puede describir funciones propuestas o detalles ya modificados. Para el estado implementado y la operación actual, consultar el [README](../../README.md) y la [documentación de arquitectura](../arquitectura.md).
+
 # pCloud Video Streamer Implementation Plan
 
 > **For Hermes:** Use subagent-driven-development skill to implement this plan task-by-task.

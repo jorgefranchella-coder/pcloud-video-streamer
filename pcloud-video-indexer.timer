@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodic pCloud video metadata scan
+
+[Timer]
+OnBootSec=5min
+OnUnitInactiveSec=6h
+Persistent=true
+Unit=pcloud-video-indexer.service
+
+[Install]
+WantedBy=timers.target

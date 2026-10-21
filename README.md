@@ -1,97 +1,77 @@
-# pCloud Video Streamer
+# Videos de pCloud: reproducción, fichas y búsqueda
 
-Lightweight self-hosted web application to browse and stream videos from a pCloud-mounted directory on a Linux server.
+Aplicación para explorar una biblioteca familiar montada con rclone, reproducir videos y encontrar escenas mediante fichas técnicas, descripciones visuales y personas identificadas manualmente.
 
-## Features
+Documentación revisada contra el código el **21 de octubre de 2026**. Las cifras de ejecución se conservan como una fotografía fechada en [Operación](docs/operacion.md); el estado actual se consulta en la interfaz o en `/api/index/status`.
 
-- 📁 **Folder browser** - Navigate directory tree with lazy-loading
-- 🎬 **Video streaming** - HTTP Range Requests for seeking/buffering
-- 📱 **Responsive UI** - Tailwind CSS dark mode, mobile-friendly sidebar
-- 🔒 **Secure** - Path traversal protection
-- 🐳 **Docker ready** - Multi-stage build, non-root user
-- ⚙️ **systemd service** - Auto-start on boot
+## Qué hace hoy
 
-## Quick Start
+- Navegación por carpetas y reproducción HTML5 con peticiones HTTP Range.
+- Inventario incremental en SQLite y extracción de duración, resolución, formato y fechas con `ffprobe`.
+- Análisis de hasta cuatro fotogramas mediante **OpenRouter Chat Completions**, con una ficha en español y referencias temporales.
+- Búsqueda textual FTS5, filtros por fecha sugerida y paginación.
+- Catálogo de personas: asignación manual de un nombre a cada observación, integrada en el streamer.
+- Panel de progreso técnico y visual, actualizado cada 15 segundos mientras la pestaña está visible.
 
-### 1. Mount pCloud with rclone
+El análisis visual no transcribe audio, no reconoce identidades automáticamente y no examina cada instante del video. La reproducción depende de los códecs que soporte el navegador; no hay transcodificación. El analizador visual trabaja por lotes manuales: no existe un temporizador visual instalado por el proyecto.
+
+## Documentación
+
+| Documento | Contenido |
+|---|---|
+| [Uso de la interfaz](docs/uso.md) | Reproducción, búsqueda, fechas, personas y lectura del progreso |
+| [Arquitectura y datos](docs/arquitectura.md) | Componentes, flujo, estados, esquema SQLite y límites |
+| [Instalación y configuración](docs/configuracion.md) | Desarrollo, systemd, Docker, variables y credenciales |
+| [Operación y recuperación](docs/operacion.md) | Ejecuciones, diagnóstico, respaldos, restauración y estado observado |
+| [Referencia API](docs/api.md) | Rutas, parámetros, respuestas, autenticación y errores |
+| [Mejoras propuestas](docs/mejoras.md) | Problemas encontrados, prioridades y criterios de aceptación |
+
+Los archivos de [docs/plans](docs/plans/) conservan las propuestas originales. No representan por sí solos las funciones implementadas ni las instrucciones de despliegue vigentes.
+
+## Arranque local
+
+Requisitos: Node.js 22 o superior, npm, `ffmpeg` y `ffprobe`; un directorio de videos legible. Para pCloud: rclone, FUSE y un montaje configurado. `better-sqlite3` es un módulo nativo; una instalación sin binario compatible puede requerir Python, make y un compilador C++.
+
+Desde la raíz del proyecto:
 
 ```bash
-# Configure rclone (one-time)
-rclone config  # create remote named "pcloud"
-
-# Create systemd mount service
-sudo cp rclone-pcloud.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now rclone-pcloud
+npm ci
+export VIDEO_ROOT='/mnt/pcloud/My Videos'
+export DATA_DIR="$PWD/data"
+PORT=3001 npm start
 ```
 
-### 2. Run the streamer
+En otra terminal, desde la misma raíz y con las mismas variables:
 
-**Development:**
 ```bash
-npm install
-VIDEO_ROOT=/mnt/pcloud/My\ Videos PORT=3001 node server.js
+export VIDEO_ROOT='/mnt/pcloud/My Videos'
+export DATA_DIR="$PWD/data"
+npm run inventory
+npm run index
 ```
 
-**Production (systemd):**
-```bash
-sudo cp pcloud-video-streamer.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now pcloud-video-streamer
+`inventory` recorre el árbol sin ejecutar `ffprobe`. `index` vuelve a recorrerlo y analiza como máximo 50 archivos elegibles por ejecución. No ejecutar dos indexadores a la vez. Para el análisis visual, configurar la clave y los límites siguiendo [Configuración](docs/configuracion.md).
+
+Abrir `http://localhost:3001`. Guardar SQLite en disco local persistente, fuera de pCloud. El servidor escucha en todas las interfaces; el acceso de lectura no tiene autenticación integrada. El despliegue de una biblioteca privada debe restringir ese acceso mediante la red o un proxy autenticado.
+
+## Mapa del repositorio
+
+```text
+server.js                        Servidor web, API, reproducción y autorización de edición
+metadata-store.js                SQLite, esquema, estados, búsquedas y personas
+indexer.js                       Inventario y fichas técnicas
+visual-analyzer.js               Fotogramas, petición a OpenRouter y persistencia visual
+public/index.html                Interfaz y estilos
+public/app.js                    Navegación, progreso, fichas, búsqueda y edición de identidades
+pcloud-video-streamer.service    Servidor HTTP
+pcloud-video-indexer.service     Lote técnico
+pcloud-video-indexer.timer       Ejecución técnica periódica
+pcloud-video-visual.service      Lote visual manual
+rclone-pcloud.service            Montaje remoto
+Dockerfile                      Imagen con Node y ffmpeg
+package.json / package-lock.json Dependencias y scripts npm
+data/                           SQLite local; excluido de Git
+docs/                           Documentación y planes históricos
 ```
 
-**Docker:**
-```bash
-docker build -t pcloud-video-streamer .
-docker run -d \
-  --name pcloud-streamer \
-  -p 3000:3000 \
-  -v /mnt/pcloud/My\ Videos:/mnt/pcloud/My\ Videos \
-  -e VIDEO_ROOT=/mnt/pcloud/My\ Videos \
-  --restart unless-stopped \
-  pcloud-video-streamer
-```
-
-## API Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/list?path=relative/path` | List directory contents |
-| GET | `/api/stream?path=relative/path` | Stream video (supports Range requests) |
-
-## Project Structure
-
-```
-├── server.js              # Express backend with Range Request support
-├── public/
-│   ├── index.html         # Tailwind CSS + HTML5 video player
-│   └── app.js             # Vanilla JS folder tree + player logic
-├── Dockerfile             # Multi-stage production build
-├── .dockerignore
-├── package.json
-├── pcloud-video-streamer.service  # systemd service
-├── rclone-pcloud.service          # systemd mount service
-└── docs/plans/            # Implementation plan
-```
-
-## Environment Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PORT` | `3000` | Server port |
-| `VIDEO_ROOT` | `/mnt/pcloud/My Videos` | Mounted pCloud path |
-
-## Supported Video Formats
-
-MP4, MKV, WebM, MOV, AVI, M4V, FLV, WMV, MPG, MPEG
-
-## Requirements
-
-- Node.js 18+
-- rclone (for pCloud mount)
-- Linux with FUSE support
-- systemd (for services)
-
-## License
-
-MIT
+Las unidades systemd incluyen usuario y rutas específicos del servidor `nbcriancas`; deben adaptarse para otro equipo. No hay una suite automatizada de pruebas ni un script `npm test` en esta versión. Tampoco hay un archivo de licencia en el repositorio: la antigua mención a MIT no constituye documentación suficiente de una licencia.
