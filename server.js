@@ -10,7 +10,11 @@ const metadata = require('./metadata-store');
 
 const app = express();
 app.disable('x-powered-by');
-const PORT = process.env.PORT || 3000;
+const portRaw = process.env.PORT;
+const PORT = portRaw === undefined || portRaw === '' ? 3000 : Number(portRaw);
+if (!Number.isSafeInteger(PORT) || PORT < 1 || PORT > 65535) {
+  throw new Error('PORT must be an integer between 1 and 65535');
+}
 const VIDEO_ROOT = process.env.VIDEO_ROOT || '/mnt/pcloud/My Videos';
 const ROOT_RESOLVED = path.resolve(VIDEO_ROOT);
 const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(__dirname, 'data'));

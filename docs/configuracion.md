@@ -16,7 +16,7 @@ El proyecto no carga archivos `.env` automáticamente. Para una ejecución manua
 |---|---|---|
 | `VIDEO_ROOT` | `/mnt/pcloud/My Videos` | Los tres; raíz de archivos |
 | `DATA_DIR` | `data/` junto al módulo | Los tres; directorio SQLite |
-| `PORT` | `3000` | Web; la unidad incluida usa `3001` |
+| `PORT` | `3000` | Web; entero entre 1 y 65535; la unidad incluida usa `3001` |
 | `METADATA_EDIT_TOKEN` | Sin definir | Web; habilita edición de nombres; mínimo 32 bytes |
 | `ACCESS_TOKEN` | Sin definir | Web; protege API y reproducción con sesión por cookie. Sin definir, el acceso de red sigue abierto |
 | `ACCESS_COOKIE_SECURE` | Desactivado | Web; `1` agrega `Secure` a la cookie, necesario detrás de HTTPS |
