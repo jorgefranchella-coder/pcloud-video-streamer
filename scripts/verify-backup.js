@@ -47,6 +47,7 @@ async function main() {
   let integrity;
   let foreignKeyErrors;
   let videoCount;
+  let currentEvidenceReferences = [];
   try {
     integrity = db.pragma('integrity_check', { simple: true });
     foreignKeyErrors = db.pragma('foreign_key_check');
@@ -58,6 +59,24 @@ async function main() {
       throw new Error('Backup contains process locks; workers must be stopped before backup');
     }
     videoCount = db.prepare('SELECT COUNT(*) AS count FROM videos').get().count;
+    currentEvidenceReferences = db.prepare(`SELECT id, visual_revision, visual_evidence_json
+      FROM videos WHERE visual_revision IS NOT NULL AND visual_fingerprint = fingerprint`).all()
+      .flatMap(video => {
+        let entries;
+        try { entries = JSON.parse(video.visual_evidence_json || '[]'); }
+        catch { throw new Error(`Invalid visual evidence JSON for video ${video.id}`); }
+        if (!Array.isArray(entries)) throw new Error(`Invalid visual evidence list for video ${video.id}`);
+        if (!entries.length) return [];
+        if (!/^[0-9a-f-]{36}$/i.test(video.visual_revision)) {
+          throw new Error(`Invalid active evidence revision for video ${video.id}`);
+        }
+        return entries.map(item => {
+          if (!Number.isSafeInteger(item.at_seconds) || item.at_seconds < 0 || item.at_seconds > 999999) {
+            throw new Error(`Invalid evidence timestamp for video ${video.id}`);
+          }
+          return { videoId: video.id, revision: video.visual_revision, atSeconds: item.at_seconds };
+        });
+      });
   } finally {
     db.close();
   }
@@ -80,6 +99,18 @@ async function main() {
   }
   if (manifest.evidence_files !== evidenceSummary.files || manifest.evidence_bytes !== evidenceSummary.bytes) {
     throw new Error('Evidence file count or size does not match manifest');
+  }
+  for (const evidence of currentEvidenceReferences) {
+    const imagePath = path.join(evidencePath, String(evidence.videoId), evidence.revision, `${evidence.atSeconds}.jpg`);
+    let stat;
+    try { stat = await fs.promises.lstat(imagePath); }
+    catch (error) {
+      if (error.code === 'ENOENT') throw new Error(`Current evidence image is missing: video ${evidence.videoId}, ${evidence.atSeconds}s`);
+      throw error;
+    }
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 700000) {
+      throw new Error(`Current evidence image is invalid: video ${evidence.videoId}, ${evidence.atSeconds}s`);
+    }
   }
   console.log(`Backup verified: ${videoCount} videos, ${evidenceSummary.files} evidence files, SQLite integrity and foreign keys clean.`);
 }
