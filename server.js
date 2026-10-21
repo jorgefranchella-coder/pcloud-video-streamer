@@ -10,10 +10,83 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const VIDEO_ROOT = process.env.VIDEO_ROOT || '/mnt/pcloud/My Videos';
 const ROOT_RESOLVED = path.resolve(VIDEO_ROOT);
+const ACCESS_TOKEN = process.env.ACCESS_TOKEN || '';
+const ACCESS_COOKIE = 'pcloud_video_session';
+const ACCESS_COOKIE_MAX_AGE = 12 * 60 * 60;
+if (ACCESS_TOKEN && Buffer.byteLength(ACCESS_TOKEN) < 32) {
+  throw new Error('ACCESS_TOKEN must contain at least 32 bytes');
+}
+const ALLOWED_ORIGINS = new Set((process.env.CORS_ORIGINS || '').split(',').map(value => value.trim()).filter(Boolean).map(value => {
+  let parsed;
+  try { parsed = new URL(value); } catch { throw new Error(`Invalid CORS_ORIGINS entry: ${value}`); }
+  if (!['http:', 'https:'].includes(parsed.protocol) || parsed.origin !== value) {
+    throw new Error(`CORS_ORIGINS entries must be exact HTTP(S) origins: ${value}`);
+  }
+  return value;
+}));
 
-app.use(cors());
+function constantTimeEqual(expected, supplied) {
+  const expectedBytes = Buffer.from(expected);
+  const suppliedBytes = Buffer.from(supplied);
+  return expectedBytes.length === suppliedBytes.length && crypto.timingSafeEqual(expectedBytes, suppliedBytes);
+}
+
+function expectedSessionValue() {
+  return crypto.createHmac('sha256', ACCESS_TOKEN).update('pcloud-video-session-v1').digest('base64url');
+}
+
+function hasValidSession(req) {
+  const cookies = String(req.headers.cookie || '').split(';');
+  const cookie = cookies.map(value => value.trim()).find(value => value.startsWith(`${ACCESS_COOKIE}=`));
+  if (!cookie) return false;
+  try {
+    return constantTimeEqual(expectedSessionValue(), decodeURIComponent(cookie.slice(ACCESS_COOKIE.length + 1)));
+  } catch {
+    return false;
+  }
+}
+
+function sameOrigin(req, origin) {
+  try {
+    const parsed = new URL(origin);
+    return parsed.host === req.get('host') && parsed.protocol === `${req.protocol}:`;
+  } catch {
+    return false;
+  }
+}
+
+app.use((req, res, next) => {
+  const origin = req.get('Origin');
+  if (!origin || sameOrigin(req, origin)) return next();
+  if (ALLOWED_ORIGINS.has(origin)) return cors({ origin, credentials: true })(req, res, next);
+  return res.status(403).json({ error: 'Origin not allowed' });
+});
 app.use(express.json({ limit: '4kb' }));
 app.use(express.static('public'));
+
+app.get('/api/access/status', (req, res) => {
+  res.json({ required: Boolean(ACCESS_TOKEN), authenticated: !ACCESS_TOKEN || hasValidSession(req) });
+});
+
+app.post('/api/access/session', (req, res) => {
+  if (!ACCESS_TOKEN) return res.status(404).json({ error: 'Access authentication is not enabled' });
+  const supplied = typeof req.body?.token === 'string' ? req.body.token : '';
+  if (!constantTimeEqual(ACCESS_TOKEN, supplied)) return res.status(401).json({ error: 'Unauthorized' });
+  const secure = process.env.ACCESS_COOKIE_SECURE === '1' ? '; Secure' : '';
+  res.setHeader('Set-Cookie', `${ACCESS_COOKIE}=${expectedSessionValue()}; Path=/; Max-Age=${ACCESS_COOKIE_MAX_AGE}; HttpOnly; SameSite=Strict${secure}`);
+  res.json({ authenticated: true });
+});
+
+app.delete('/api/access/session', (_req, res) => {
+  const secure = process.env.ACCESS_COOKIE_SECURE === '1' ? '; Secure' : '';
+  res.setHeader('Set-Cookie', `${ACCESS_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict${secure}`);
+  res.status(204).end();
+});
+
+app.use('/api', (req, res, next) => {
+  if (!ACCESS_TOKEN || hasValidSession(req)) return next();
+  res.status(401).json({ error: 'Authentication required' });
+});
 
 // Helper: safely resolve path within VIDEO_ROOT
 function safeResolve(requestedPath) {

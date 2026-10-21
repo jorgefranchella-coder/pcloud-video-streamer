@@ -13,6 +13,7 @@ Environment="DATA_DIR=/home/jorge/orca/workspaces/Video-Home/meta-data-videos/da
 Environment=PORT=3001
 Environment=NODE_ENV=production
 EnvironmentFile=-/etc/pcloud-video-metadata.env
+EnvironmentFile=-/etc/pcloud-video-access.env
 ExecStart=/home/jorge/.hermes/node/bin/node server.js
 Restart=always
 RestartSec=10

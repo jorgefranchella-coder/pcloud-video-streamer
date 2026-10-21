@@ -68,7 +68,13 @@ const SEARCH_PAGE_SIZE = 50;
 const API_BASE = '';
 
 // Initialize
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+  if (!await establishAccessSession()) {
+    folderTree.textContent = 'Acceso requerido para consultar la biblioteca.';
+    mobileFolderTree.textContent = 'Acceso requerido para consultar la biblioteca.';
+    progressUpdated.textContent = 'Sesión no iniciada';
+    return;
+  }
   loadTree('');
   setupEventListeners();
   setupVideoEvents();
@@ -80,6 +86,33 @@ document.addEventListener('DOMContentLoaded', () => {
     if (document.visibilityState === 'visible') loadProcessProgress();
   });
 });
+
+async function establishAccessSession() {
+  try {
+    const statusResponse = await fetch(`${API_BASE}/api/access/status`, { credentials: 'same-origin' });
+    if (!statusResponse.ok) throw new Error(`HTTP ${statusResponse.status}`);
+    const status = await statusResponse.json();
+    if (!status.required || status.authenticated) return true;
+
+    const token = window.prompt('Token de acceso a la biblioteca:');
+    if (!token) return false;
+    const response = await fetch(`${API_BASE}/api/access/session`, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token })
+    });
+    if (!response.ok) {
+      window.alert(response.status === 401 ? 'El token no es válido.' : `No se pudo iniciar sesión (HTTP ${response.status}).`);
+      return false;
+    }
+    return true;
+  } catch (error) {
+    folderTree.textContent = `No se pudo verificar el acceso (${error.message}).`;
+    mobileFolderTree.textContent = `No se pudo verificar el acceso (${error.message}).`;
+    return false;
+  }
+}
 
 let progressRequestInFlight = false;
 

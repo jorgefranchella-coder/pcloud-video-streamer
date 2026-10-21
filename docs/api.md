@@ -6,7 +6,7 @@ Base local del despliegue systemd: `http://127.0.0.1:3001`. Todas las rutas de a
 
 ## Acceso
 
-Las rutas GET son públicas para quien tenga acceso de red al servidor. Las dos rutas de edición exigen `Authorization: Bearer <METADATA_EDIT_TOKEN>`. El servidor permite CORS general y limita el cuerpo JSON de entrada a 4 KiB. No hay sesiones, usuarios ni autorización diferenciada por biblioteca.
+Si `ACCESS_TOKEN` está configurado, toda la API y la reproducción requieren una sesión por cookie `HttpOnly` de 12 horas. La interfaz solicita el token y lo intercambia por la cookie; el token no aparece en URLs ni en enlaces de video. `GET /api/access/status` informa si se requiere acceso y si la sesión actual está autenticada; `POST /api/access/session` recibe `{ "token": "..." }`; `DELETE /api/access/session` cierra la sesión. Sin `ACCESS_TOKEN`, el acceso conserva el comportamiento abierto anterior. Las dos rutas de edición exigen además `Authorization: Bearer <METADATA_EDIT_TOKEN>`. CORS permite solicitudes same-origin y, solo si se configura, los orígenes HTTP(S) exactos de `CORS_ORIGINS`; un origen no autorizado recibe `403`. El cuerpo JSON está limitado a 4 KiB.
 
 Errores comunes de edición: `503` si no se configuró el token, `401` si no coincide, `400` para datos inválidos y `404` cuando no existe el video/observación solicitado. El middleware de Express puede emitir errores no JSON para cuerpos malformados o demasiado grandes; no existe un formato de error unificado.
 
@@ -14,6 +14,9 @@ Errores comunes de edición: `503` si no se configuró el token, `401` si no coi
 
 | Método y ruta | Parámetros / función |
 |---|---|
+| `GET /api/access/status` | Indica si el acceso está protegido y si la sesión actual es válida |
+| `POST /api/access/session` | Recibe `{ "token": "..." }` y establece cookie HttpOnly |
+| `DELETE /api/access/session` | Elimina la cookie de sesión |
 | `GET /api/list` | `path` opcional, raíz por defecto; lista carpetas y extensiones reconocidas |
 | `GET /api/stream` | `path` obligatorio; entrega archivo, acepta rango simple |
 | `GET /api/metadata` | `path` obligatorio; ficha del índice |

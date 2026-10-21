@@ -18,6 +18,9 @@ El proyecto no carga archivos `.env` automáticamente. Para una ejecución manua
 | `DATA_DIR` | `data/` junto al módulo | Los tres; directorio SQLite |
 | `PORT` | `3000` | Web; la unidad incluida usa `3001` |
 | `METADATA_EDIT_TOKEN` | Sin definir | Web; habilita edición de nombres |
+| `ACCESS_TOKEN` | Sin definir | Web; protege API y reproducción con sesión por cookie. Sin definir, el acceso de red sigue abierto |
+| `ACCESS_COOKIE_SECURE` | Desactivado | Web; `1` agrega `Secure` a la cookie, necesario detrás de HTTPS |
+| `CORS_ORIGINS` | Vacío | Web; lista separada por comas de orígenes HTTP(S) exactos autorizados para llamadas cross-origin |
 | `INDEX_MODE` | Sin definir | Indexador; `inventory` evita ffprobe |
 | `PROBE_TIMEOUT_MS` | `30000` | Indexador; timeout por ffprobe |
 | `MAX_PROBES` | `50` | Indexador; intentos por recorrido; `0` sin límite |
@@ -94,10 +97,21 @@ Para editar identidades, crear `/etc/pcloud-video-metadata.env` con `sudoedit`:
 METADATA_EDIT_TOKEN=REEMPLAZAR_POR_UN_TOKEN_ALEATORIO
 ```
 
+Para restringir la biblioteca a personas con token, crear `/etc/pcloud-video-access.env`:
+
+```ini
+ACCESS_TOKEN=REEMPLAZAR_POR_UN_TOKEN_ALEATORIO_DE_32_BYTES_O_MAS
+ACCESS_COOKIE_SECURE=1
+# Solo si una aplicación web en otro origen necesita llamar a la API:
+# CORS_ORIGINS=https://mi-dominio.example
+```
+
+Generar el token, por ejemplo, con `openssl rand -hex 32`. El servidor pide el token una vez y entrega una sesión de 12 horas en una cookie `HttpOnly`; no se guarda en el navegador ni se agrega a las URLs. `ACCESS_COOKIE_SECURE=1` requiere HTTPS. Si el servicio se usa por HTTP local, omitirla. Los orígenes CORS deben ser valores exactos como `https://app.example`, sin ruta ni barra final; por defecto se aceptan solicitudes same-origin y no se habilitan clientes cross-origin. La edición de identidades conserva además su token `METADATA_EDIT_TOKEN`.
+
 Se puede generar un valor con `openssl rand -hex 32`. Son archivos distintos: la clave del proveedor no debe entregarse al navegador.
 
 ```bash
-sudo chmod 600 /etc/pcloud-video-visual.env /etc/pcloud-video-metadata.env
+sudo chmod 600 /etc/pcloud-video-visual.env /etc/pcloud-video-metadata.env /etc/pcloud-video-access.env
 sudo cp pcloud-video-streamer.service pcloud-video-indexer.service pcloud-video-indexer.timer pcloud-video-visual.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now pcloud-video-streamer.service
