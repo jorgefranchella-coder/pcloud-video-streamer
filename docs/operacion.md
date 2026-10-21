@@ -125,7 +125,7 @@ npm run verify-backup -- /ruta/privada/pcloud-video-backups/pcloud-video-FECHA-P
 sudo systemctl start pcloud-video-streamer.service
 ```
 
-El verificador comprueba el marcador, integridad SQLite, claves foráneas, tablas requeridas, cantidad/tamaño total de evidencia frente al manifiesto y presencia de cada fotograma referenciado por fichas vigentes. Reactivar solo los timers que estaban activos antes del respaldo. Este procedimiento no sustituye una restauración de prueba; este documento todavía no ejecutó una.
+El verificador comprueba el marcador, integridad SQLite, claves foráneas, tablas requeridas, SHA-256 de la base y del árbol de evidencia (en el formato de manifiesto v2), cantidad/tamaño total de evidencia y presencia de cada fotograma referenciado por fichas vigentes. Acepta manifiestos anteriores v1, que no guardan hashes. Reactivar solo los timers que estaban activos antes del respaldo. Este procedimiento no sustituye una restauración de prueba; este documento todavía no ejecutó una.
 
 ## Restauración
 

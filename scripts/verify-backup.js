@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const Database = require('better-sqlite3');
+const { hashFile, hashTree } = require('./backup-integrity');
 
 const backupDirArg = process.argv[2];
 
@@ -50,11 +51,22 @@ async function main() {
     || !Number.isSafeInteger(manifest.stale_locks_removed) || manifest.stale_locks_removed < 0) {
     throw new Error('Backup manifest has invalid evidence or lock counts');
   }
+  const formatVersion = manifest.format_version === undefined ? 1 : manifest.format_version;
+  if (![1, 2].includes(formatVersion)) throw new Error('Unsupported backup manifest version');
+  if (formatVersion === 2 && (!/^[0-9a-f]{64}$/i.test(manifest.database_sha256 || '')
+    || (manifest.evidence_copied
+      ? !/^[0-9a-f]{64}$/i.test(manifest.evidence_sha256 || '')
+      : manifest.evidence_sha256 !== null))) {
+    throw new Error('Backup manifest has invalid SHA-256 checksums');
+  }
   if (manifest.sqlite_integrity_check !== 'ok') throw new Error('Manifest does not report a clean SQLite integrity check');
 
   const databasePath = path.join(backupDir, 'videos.sqlite');
   const databaseStat = await fs.promises.lstat(databasePath);
   if (!databaseStat.isFile() || databaseStat.isSymbolicLink()) throw new Error('Backup database must be a regular file');
+  if (formatVersion === 2 && await hashFile(databasePath) !== manifest.database_sha256) {
+    throw new Error('Backup database checksum does not match manifest');
+  }
   const db = new Database(databasePath, { readonly: true, fileMustExist: true });
   let integrity;
   let foreignKeyErrors;
@@ -115,6 +127,9 @@ async function main() {
   }
   if (manifest.evidence_files !== evidenceSummary.files || manifest.evidence_bytes !== evidenceSummary.bytes) {
     throw new Error('Evidence file count or size does not match manifest');
+  }
+  if (formatVersion === 2 && evidenceExists && await hashTree(evidencePath) !== manifest.evidence_sha256) {
+    throw new Error('Evidence checksum does not match manifest');
   }
   for (const evidence of currentEvidenceReferences) {
     const imagePath = path.join(evidencePath, String(evidence.videoId), evidence.revision, `${evidence.atSeconds}.jpg`);

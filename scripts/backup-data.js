@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const Database = require('better-sqlite3');
+const { hashFile, hashTree } = require('./backup-integrity');
 
 const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(__dirname, '..', 'data'));
 const backupRootArg = process.argv[2];
@@ -141,12 +142,15 @@ async function main() {
   finally { finalSourceCheck.close(); }
 
   const manifest = {
+    format_version: 2,
     created_at: new Date().toISOString(),
     sqlite_integrity_check: integrity,
+    database_sha256: await hashFile(path.join(backupDir, 'videos.sqlite')),
     stale_locks_removed: staleLocksRemoved,
     evidence_copied: evidenceCopied,
     evidence_files: evidenceSummary.files,
-    evidence_bytes: evidenceSummary.bytes
+    evidence_bytes: evidenceSummary.bytes,
+    evidence_sha256: evidenceCopied ? await hashTree(path.join(backupDir, 'evidence')) : null
   };
   const manifestPath = path.join(backupDir, 'manifest.json');
   await fs.promises.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
