@@ -198,9 +198,13 @@ async function getVisualTimerStatus() {
   return value;
 }
 
-app.get('/api/index/status', async (_req, res) => {
+function asyncRoute(handler) {
+  return (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
+}
+
+app.get('/api/index/status', asyncRoute(async (_req, res) => {
   res.json({ ...metadata.status(), visual_timer: await getVisualTimerStatus() });
-});
+}));
 
 app.get('/api/people', (_req, res) => {
   res.json({ items: metadata.listPeople(), merges: metadata.listPersonMerges(),
@@ -309,7 +313,7 @@ app.get('/api/metadata', (req, res) => {
   });
 });
 
-app.get('/api/metadata/evidence', async (req, res) => {
+app.get('/api/metadata/evidence', asyncRoute(async (req, res) => {
   const relativePath = req.query.path;
   const revision = req.query.revision;
   const atSeconds = typeof req.query.at_seconds === 'string' && /^(0|[1-9]\d{0,5})$/.test(req.query.at_seconds)
@@ -344,7 +348,7 @@ app.get('/api/metadata/evidence', async (req, res) => {
     console.error('Evidence access error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 function authorizeMetadataEdit(req, res) {
   const expected = process.env.METADATA_EDIT_TOKEN;
@@ -433,7 +437,7 @@ app.patch('/api/metadata/people', (req, res) => {
 });
 
 // GET /api/list?path=relative/path - List directory contents
-app.get('/api/list', async (req, res) => {
+app.get('/api/list', asyncRoute(async (req, res) => {
   const relativePath = req.query.path || '';
   const fullPath = safeResolve(relativePath);
   
@@ -462,7 +466,7 @@ app.get('/api/list', async (req, res) => {
     console.error('List error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 function parseByteRange(header, fileSize) {
   if (!Number.isSafeInteger(fileSize) || fileSize <= 0) return null;
@@ -495,7 +499,7 @@ function pipeFileStream(fullPath, options, res) {
 }
 
 // GET /api/stream?path=relative/path - Stream video with Range Requests
-app.get('/api/stream', async (req, res) => {
+app.get('/api/stream', asyncRoute(async (req, res) => {
   const relativePath = req.query.path;
   if (typeof relativePath !== 'string' || !relativePath) {
     return res.status(400).json({ error: 'Missing path parameter' });
@@ -550,7 +554,7 @@ app.get('/api/stream', async (req, res) => {
     console.error('Stream error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 app.use((error, req, res, next) => {
   if (!req.path.startsWith('/api/')) return next(error);
