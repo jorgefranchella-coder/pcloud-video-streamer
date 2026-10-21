@@ -157,4 +157,4 @@ El primer caso crea o reutiliza un nombre; el segundo asigna uno existente; el t
 
 Respuesta `{ "person": { "id": 7, "name": "Jorge" }, "people": [...] }`; al quitar una asignación, `person` es `null`. Persona desconocida: `400`; video/observación no disponible: `404`. Crear un nombre no asigna automáticamente el resto de sus apariciones.
 
-`PATCH /api/metadata/people` acepta `{ "path": "Familia/clip.mp4", "names": ["Jorge"] }`, hasta 20 nombres de 1–80 caracteres, y devuelve `{ "names": [...] }`. Reemplaza la lista general; no crea filas en el catálogo ni asignaciones por observación. Su reconstrucción actual del texto FTS puede omitir nombres del catálogo ya asociados: preferir el flujo PUT de la interfaz y tratar la unificación de ambos mecanismos como mejora pendiente.
+`PATCH /api/metadata/people` acepta `{ "path": "Familia/clip.mp4", "names": ["Jorge"] }`, hasta 20 nombres de 1–80 caracteres, y devuelve `{ "names": [...] }`. Reemplaza la lista general; no crea filas en el catálogo ni asignaciones por observación. Al reconstruir el texto FTS conserva también los nombres de las asignaciones por observación, para que estas no desaparezcan de la búsqueda.

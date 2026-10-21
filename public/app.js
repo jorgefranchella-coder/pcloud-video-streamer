@@ -301,6 +301,12 @@ function setupVideoEvents() {
 }
 
 // Load directory tree
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, character => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  })[character]);
+}
+
 async function loadTree(path) {
   currentPath = path;
   currentPathDisplay.textContent = path === '' ? '/' : `/${path}`;
@@ -319,8 +325,8 @@ async function loadTree(path) {
     breadcrumbs.classList.remove('hidden');
   } catch (err) {
     console.error('Failed to load tree:', err);
-    folderTree.innerHTML = `<div class="text-center text-red-400 py-8">Error: ${err.message}</div>`;
-    mobileFolderTree.innerHTML = `<div class="text-center text-red-400 py-8">Error: ${err.message}</div>`;
+    folderTree.textContent = `Error: ${err.message}`;
+    mobileFolderTree.textContent = `Error: ${err.message}`;
   }
 }
 
@@ -341,13 +347,13 @@ function renderTree(items, container) {
       li.innerHTML = `
         <button 
           class="folder-btn w-full flex items-center gap-2 px-3 py-2 text-left rounded-lg hover:bg-gray-700 transition-colors text-sm"
-          data-path="${item.path}"
+          data-path="${escapeHtml(item.path)}"
           aria-expanded="false"
         >
           <svg class="w-5 h-5 text-yellow-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>
           </svg>
-          <span class="truncate font-medium">${item.name}</span>
+          <span class="truncate font-medium">${escapeHtml(item.name)}</span>
           <svg class="w-4 h-4 text-gray-500 ml-auto folder-chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
           </svg>
@@ -373,13 +379,13 @@ function renderTree(items, container) {
       li.innerHTML = `
         <button 
           class="video-btn w-full flex items-center gap-2 px-3 py-2 text-left rounded-lg hover:bg-gray-700 transition-colors text-sm"
-          data-path="${item.path}"
+          data-path="${escapeHtml(item.path)}"
         >
           <svg class="w-5 h-5 text-green-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/>
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
           </svg>
-          <span class="truncate">${item.name}</span>
+          <span class="truncate">${escapeHtml(item.name)}</span>
         </button>
       `;
       const btn = li.querySelector('.video-btn');
@@ -411,13 +417,13 @@ async function loadSubfolder(folderPath, parentLi) {
           li.innerHTML = `
             <button 
               class="folder-btn w-full flex items-center gap-2 px-3 py-2 text-left rounded-lg hover:bg-gray-700 transition-colors text-sm"
-              data-path="${item.path}"
+              data-path="${escapeHtml(item.path)}"
               aria-expanded="false"
             >
               <svg class="w-5 h-5 text-yellow-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>
               </svg>
-              <span class="truncate font-medium">${item.name}</span>
+              <span class="truncate font-medium">${escapeHtml(item.name)}</span>
               <svg class="w-4 h-4 text-gray-500 ml-auto folder-chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
               </svg>
@@ -441,13 +447,13 @@ async function loadSubfolder(folderPath, parentLi) {
           li.innerHTML = `
             <button 
               class="video-btn w-full flex items-center gap-2 px-3 py-2 text-left rounded-lg hover:bg-gray-700 transition-colors text-sm"
-              data-path="${item.path}"
+              data-path="${escapeHtml(item.path)}"
             >
               <svg class="w-5 h-5 text-green-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/>
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
               </svg>
-              <span class="truncate">${item.name}</span>
+              <span class="truncate">${escapeHtml(item.name)}</span>
             </button>
           `;
           const btn = li.querySelector('.video-btn');
@@ -489,7 +495,7 @@ function renderBreadcrumbs(path) {
     
     const li = document.createElement('li');
     li.innerHTML = `
-      <button class="breadcrumb-btn hover:text-white transition-colors" data-path="${accumulated}">${part}</button>
+      <button class="breadcrumb-btn hover:text-white transition-colors" data-path="${escapeHtml(accumulated)}">${escapeHtml(part)}</button>
     `;
     li.querySelector('.breadcrumb-btn').addEventListener('click', () => loadTree(accumulated));
     breadcrumbList.appendChild(li);

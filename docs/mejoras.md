@@ -2,7 +2,7 @@
 
 [Volver al README](../README.md)
 
-Propuesta basada en la revisión del código y la operación del 21/10/2026. Estas mejoras **no están implementadas por este trabajo de documentación**. El objetivo es completar la biblioteca de forma confiable y permitir recuperar recuerdos por personas, hechos y fechas sin perder confirmaciones humanas.
+Propuesta basada en la revisión del código y la operación del 21/10/2026. La implementación de estas mejoras se está trabajando en ramas de entrega; consultar el estado de cada elemento en esta tabla y los cambios del repositorio. El objetivo es completar la biblioteca de forma confiable y permitir recuperar recuerdos por personas, hechos y fechas sin perder confirmaciones humanas.
 
 ## Orden recomendado
 
@@ -12,9 +12,9 @@ Esfuerzo relativo: S = cambio acotado; M = varios módulos y comprobaciones; L =
 
 | Prioridad | Mejora | Evidencia actual y resultado esperado | Esfuerzo |
 |---|---|---|---|
-| P0 | Eliminar interpolación de datos en HTML | `renderTree`, `loadSubfolder` y `renderBreadcrumbs` insertan nombres/rutas en `innerHTML`. Usar nodos, `textContent` y `dataset`; nombres especiales deben verse como texto y nunca ejecutar HTML | S |
+| P0 | Eliminar interpolación de datos en HTML | En esta rama se escapan nombres y rutas dinámicos antes de insertarlos y los errores se escriben como texto. Queda como criterio de mantenimiento preferir nodos y `textContent`; nombres especiales nunca deben ejecutar HTML | S (en curso) |
 | P0 | Exclusión mutua y recuperación por trabajo | No hay bloqueo entre instancias; el visual restablece todos los `running`. Implementar claim atómico/lease y recuperación solo de trabajos vencidos. Dos instancias no deben procesar ni marcar ausente el mismo archivo de forma conflictiva | M |
-| P0 | Preservar coherencia de identidades | Un cambio de fingerprint deja asociaciones viejas; regenerar elimina asociaciones; el PATCH antiguo puede sacar nombres del índice. Versionar observaciones, invalidar asociaciones obsoletas y centralizar reconstrucción FTS en transacciones | M |
+| P0 | Preservar coherencia de identidades | En esta rama, el PATCH conserva en FTS los nombres asignados por observación y la persistencia visual revierte el borrado de asociaciones si falla la actualización condicional. Pendiente: versionar observaciones y reconciliar asociaciones al regenerar o cambiar fingerprint | M (en curso) |
 | P0 si hay acceso fuera de una red controlada | Proteger lectura y administración | La lectura es pública y CORS general; el token solo protege nombres. Incorporar acceso autenticado y HTTPS en el despliegue, origen permitido y autorización de acciones. Streaming/listado deben respetar la misma política | M |
 | P1 | Cola continua con límites | Técnico cada 6 h y visual manual; no hay encadenamiento. Un coordinador debe despachar elegibles, respetar pausas/cuotas y continuar sin comandos por cada ficha | L |
 | P1 | Reintentos con espera y presupuesto | Un 429/5xx termina el lote; fallos antiguos pueden volver a ocupar los primeros lugares. Guardar intentos, próxima ejecución y causa; aplicar backoff, tope de intentos y presupuesto por período | M |

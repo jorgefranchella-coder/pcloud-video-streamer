@@ -166,8 +166,7 @@ async function analyzeVideo(row, apiKey) {
       confirmedPeople: JSON.parse(row.confirmed_people_json)
     });
     const persistResult = db.transaction(() => {
-      db.prepare('DELETE FROM video_person_observations WHERE video_id = ?').run(row.id);
-      return db.prepare(`UPDATE videos SET visual_status = 'done', visual_title = @title,
+      const updated = db.prepare(`UPDATE videos SET visual_status = 'done', visual_title = @title,
       visual_summary = @summary, visual_uncertainty = @uncertainty,
       visual_people_json = @people, visual_events_json = @events,
       visual_places_json = @places, visual_keywords_json = @keywords,
@@ -183,9 +182,10 @@ async function analyzeVideo(row, apiKey) {
       date_clues: JSON.stringify(result.date_clues), search_text: searchText, model: MODEL,
       prompt_version: PROMPT_VERSION, usage: JSON.stringify(usage || {})
       });
+      if (!updated.changes) throw new Error('Video changed in the index during analysis');
+      db.prepare('DELETE FROM video_person_observations WHERE video_id = ?').run(row.id);
     });
-    const updated = persistResult();
-    if (!updated.changes) throw new Error('Video changed in the index during analysis');
+    persistResult();
     console.log(JSON.stringify({ video_id: row.id, frames: frames.length, model: MODEL, usage }));
   } catch (error) {
     db.prepare("UPDATE videos SET visual_status = 'failed', visual_error = ? WHERE id = ? AND fingerprint = ?")

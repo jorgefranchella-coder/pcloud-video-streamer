@@ -209,13 +209,15 @@ function buildVisualSearchText({ events, people, places, keywords, dateClues, co
 function setConfirmedPeople(relativePath, names) {
   const row = getByPath.get(relativePath);
   if (!row) return false;
+  const assignedNames = db.prepare(`SELECT people.name FROM video_person_observations
+    JOIN people ON people.id = video_person_observations.person_id WHERE video_id = ?`).all(row.id).map(item => item.name);
   const searchText = buildVisualSearchText({
     events: JSON.parse(row.visual_events_json),
     people: JSON.parse(row.visual_people_json),
     places: JSON.parse(row.visual_places_json),
     keywords: JSON.parse(row.visual_keywords_json),
     dateClues: JSON.parse(row.visual_date_clues_json),
-    confirmedPeople: names
+    confirmedPeople: [...names, ...assignedNames]
   });
   db.prepare('UPDATE videos SET confirmed_people_json = ?, visual_search_text = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
     .run(JSON.stringify(names), searchText, row.id);
@@ -261,13 +263,13 @@ function setVideoPerson({ relativePath, observationIndex, personId, personName }
         .run(row.id, observationIndex, personId);
     }
 
-    const names = db.prepare(`SELECT people.name FROM video_person_observations
+    const assignedNames = db.prepare(`SELECT people.name FROM video_person_observations
       JOIN people ON people.id = video_person_observations.person_id WHERE video_id = ?`).all(row.id).map(item => item.name);
     const searchText = buildVisualSearchText({
       events: JSON.parse(row.visual_events_json), people: observations,
       places: JSON.parse(row.visual_places_json), keywords: JSON.parse(row.visual_keywords_json),
       dateClues: JSON.parse(row.visual_date_clues_json),
-      confirmedPeople: [...JSON.parse(row.confirmed_people_json), ...names]
+      confirmedPeople: [...JSON.parse(row.confirmed_people_json), ...assignedNames]
     });
     db.prepare('UPDATE videos SET visual_search_text = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
       .run(searchText, row.id);
