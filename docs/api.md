@@ -147,7 +147,7 @@ curl -fsS --get http://127.0.0.1:3001/api/search \
 | Parámetro | Comportamiento |
 |---|---|
 | `q` | Se recorta a 100 caracteres; hasta ocho palabras Unicode, prefijos unidos con AND. Vacío lista sin condición FTS |
-| `from`, `to` | Formato `YYYY-MM-DD`, inclusivos sobre `recorded_at`; se valida forma, no calendario completo. Formatos inválidos se ignoran |
+| `from`, `to` | Fechas reales `YYYY-MM-DD`, inclusivas sobre `recorded_at`; valores inválidos o un rango invertido devuelven `400` |
 | `person_id` | ID positivo; filtra asociaciones manuales activas de la revisión actual. IDs inválidos devuelven `400` |
 | `folder` | Ruta relativa; incluye esa carpeta y sus descendientes, con límite de ruta segura. Vacío omite el filtro; rutas inválidas devuelven `400` |
 | `limit` | Por defecto 50, entero entre 1 y 100 |

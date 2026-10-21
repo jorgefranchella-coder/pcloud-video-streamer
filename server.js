@@ -225,8 +225,20 @@ app.patch('/api/people/:id', (req, res) => {
 
 app.get('/api/search', (req, res) => {
   const query = String(req.query.q || '').trim().slice(0, 100);
-  const from = typeof req.query.from === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.query.from) ? req.query.from : null;
-  const to = typeof req.query.to === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.query.to) ? req.query.to : null;
+  const isDate = value => {
+    if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+    const parsed = new Date(`${value}T00:00:00Z`);
+    return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+  };
+  const fromRaw = req.query.from;
+  const toRaw = req.query.to;
+  if ((fromRaw !== undefined && fromRaw !== '' && !isDate(fromRaw))
+    || (toRaw !== undefined && toRaw !== '' && !isDate(toRaw))) {
+    return res.status(400).json({ error: 'from and to must be valid dates in YYYY-MM-DD format' });
+  }
+  const from = fromRaw || null;
+  const to = toRaw || null;
+  if (from && to && from > to) return res.status(400).json({ error: 'from must not be after to' });
   const personIdRaw = req.query.person_id;
   const personId = personIdRaw === undefined ? null : /^\d+$/.test(String(personIdRaw)) ? Number(personIdRaw) : NaN;
   if (personId !== null && (!Number.isSafeInteger(personId) || personId < 1)) {
