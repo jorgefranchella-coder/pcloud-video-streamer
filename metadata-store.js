@@ -172,7 +172,13 @@ function withJobLock(name, operation) {
     let heartbeat;
     try {
       startWorkerRun(name);
-      heartbeat = setInterval(() => touchWorkerRun(name), 15000);
+      heartbeat = setInterval(() => {
+        try {
+          touchWorkerRun(name);
+        } catch (error) {
+          console.error(`Worker heartbeat failed for ${name}:`, error.message);
+        }
+      }, 15000);
       heartbeat.unref();
       const result = await operation();
       finishWorkerRun(name, 'done');
