@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
-const { db, getByPath, upsert, withJobLock, setWorkerConfiguration, setWorkerActivity } = require('./metadata-store');
+const { db, getByPath, upsert, withJobLock, setWorkerConfiguration, setWorkerActivity, getAutomationControl } = require('./metadata-store');
 const { indexerConfiguration } = require('./config');
 
 const execFileAsync = promisify(execFile);
@@ -148,6 +148,10 @@ async function runScanLocked() {
 
 function runScan() {
   return withJobLock('indexer', () => {
+    if (getAutomationControl().paused) {
+      setWorkerActivity('indexer', { phase: 'pausado', result: 'La automatización está pausada; no se inició el inventario' });
+      return;
+    }
     setWorkerConfiguration('technical', {
       probe_timeout_ms: PROBE_TIMEOUT_MS, max_probes: MAX_PROBES,
       retry_failed: RETRY_FAILED, inventory_only: INVENTORY_ONLY

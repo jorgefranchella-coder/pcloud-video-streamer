@@ -62,6 +62,8 @@ const visualProgressDetail = document.getElementById('visualProgressDetail');
 const visualProgressBar = document.getElementById('visualProgressBar');
 const scanProgressStatus = document.getElementById('scanProgressStatus');
 const effectiveConfiguration = document.getElementById('effectiveConfiguration');
+const automationControlBtn = document.getElementById('automationControlBtn');
+const automationControlStatus = document.getElementById('automationControlStatus');
 let selectedVideoPath = null;
 let selectedMetadataRevision = null;
 let playbackRequestId = 0;
@@ -246,6 +248,16 @@ function renderProcessProgress(status) {
     const next = pipelineTimer.next_run ? ` · próximo ${pipelineTimer.next_run}` : '';
     visualProgressDetail.textContent += ` · Pipeline automático habilitado${next}`;
   }
+  const control = status.automation_control || {};
+  automationControlBtn.classList.toggle('hidden', !status.can_control_automation);
+  automationControlBtn.dataset.paused = String(Boolean(control.paused));
+  automationControlBtn.textContent = control.paused ? 'Reanudar procesamiento' : 'Pausar procesamiento';
+  automationControlStatus.textContent = control.paused
+    ? `Procesamiento pausado desde ${control.changed_at || 'la interfaz'}. El trabajo técnico en curso termina; el analizador visual no toma otro video.`
+    : 'Procesamiento habilitado.';
+  if (control.changed_by && control.changed_by !== 'initialization') {
+    automationControlStatus.textContent += ` Último cambio: ${control.changed_by}, ${control.changed_at}.`;
+  }
   const history = status.worker_history || {};
   const describeLastRun = run => {
     if (!run) return '';
@@ -277,7 +289,8 @@ function renderProcessProgress(status) {
     const requestLimit = effective.max_visual_requests_per_day
       ? `, ${format(effective.max_visual_requests_per_day)} solicitudes/día UTC`
       : ', solicitudes/día sin límite';
-    settings.push(`Visual: ${effective.model}, lote ${format(effective.max_visual)}, máximo ${format(effective.max_visual_attempts)} intentos${requestLimit}, reintentos ${effective.retry_failed ? 'activos' : 'desactivados'}${target}`);
+    const sampling = `, hasta ${format(effective.max_visual_frames || 4)} fotogramas${effective.scene_sampling ? ' con escenas' : ' según duración'}`;
+    settings.push(`Visual: ${effective.model}, lote ${format(effective.max_visual)}, máximo ${format(effective.max_visual_attempts)} intentos${requestLimit}${sampling}, reintentos ${effective.retry_failed ? 'activos' : 'desactivados'}${target}`);
   }
   effectiveConfiguration.textContent = settings.length
     ? `Configuración efectiva de la última ejecución: ${settings.join(' · ')}`
@@ -326,6 +339,7 @@ function renderProcessProgress(status) {
 }
 
 function setupEventListeners() {
+  automationControlBtn.addEventListener('click', changeAutomationControl);
   // Refresh button
   refreshBtn.addEventListener('click', updateSearch);
   peopleDirectoryBtn.addEventListener('click', openPeopleDirectory);
@@ -389,6 +403,29 @@ function setupEventListeners() {
       first.focus();
     }
   });
+}
+
+async function changeAutomationControl() {
+  const token = tokenForEditing();
+  if (!token) return;
+  automationControlBtn.disabled = true;
+  automationControlStatus.textContent = 'Actualizando el control…';
+  try {
+    const paused = automationControlBtn.dataset.paused !== 'true';
+    const response = await apiFetch(`${API_BASE}/api/index/control`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ paused })
+    });
+    if (response.status === 401) editToken = null;
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    await loadProcessProgress();
+  } catch (error) {
+    automationControlStatus.textContent = `No se pudo cambiar el estado: ${error.message}`;
+  } finally {
+    automationControlBtn.disabled = false;
+  }
 }
 
 function updateSearch() {

@@ -6,7 +6,7 @@ const { promisify } = require('util');
 const {
   db, buildVisualSearchText, withJobLock, setWorkerConfiguration, setWorkerActivity,
   reserveVisualDailyRequest, getVisualProviderControl, setVisualProviderControl,
-  clearVisualProviderControl, getVisualMonthlySpend
+  clearVisualProviderControl, getVisualMonthlySpend, getAutomationControl
 } = require('./metadata-store');
 const { visualConfiguration } = require('./config');
 
@@ -24,6 +24,8 @@ if (parsedApiUrl.protocol !== 'https:' || parsedApiUrl.username || parsedApiUrl.
 }
 const PROMPT_VERSION = 'visual-v2';
 const MAX_VISUAL = CONFIG.max_visual;
+const MAX_VISUAL_FRAMES = CONFIG.max_visual_frames;
+const VISUAL_SCENE_SAMPLING = CONFIG.visual_scene_sampling;
 const MAX_VISUAL_ATTEMPTS = CONFIG.max_visual_attempts;
 const MAX_VISUAL_REQUESTS_PER_DAY = CONFIG.max_visual_requests_per_day;
 const MAX_VISUAL_COST_PER_MONTH_USD = CONFIG.max_visual_cost_per_month_usd;
@@ -56,10 +58,40 @@ const responseSchema = {
   additionalProperties: false
 };
 
-function sampleTimes(durationMs) {
-  if (!durationMs || durationMs < 2000) return [0];
+function sampleTimes(durationMs, maximum = MAX_VISUAL_FRAMES) {
+  if (!durationMs || durationMs < 2000 || maximum === 1) return [0];
   const seconds = durationMs / 1000;
-  return [...new Set([0.08, 0.35, 0.65, 0.92].map(fraction => Math.floor(seconds * fraction)))];
+  const count = Math.min(maximum, Math.max(2, Math.ceil(seconds / 1800) + 2));
+  const times = Array.from({ length: count }, (_, index) =>
+    Math.floor(seconds * (0.05 + 0.9 * index / (count - 1))));
+  return [...new Set(times)];
+}
+
+async function detectSceneTimes(fullPath) {
+  try {
+    const { stderr } = await execFileAsync('ffmpeg', [
+      '-hide_banner', '-loglevel', 'info', '-i', fullPath,
+      '-vf', 'fps=1/2,scale=160:-2,select=gt(scene\\,0.25),showinfo',
+      '-an', '-f', 'null', '-'
+    ], { timeout: 90000, maxBuffer: 3 * 1024 * 1024 });
+    return [...new Set([...String(stderr).matchAll(/pts_time:(\d+(?:\.\d+)?)/g)
+      .map(match => Number(match[1])).filter(Number.isFinite))].sort((a, b) => a - b);
+  } catch (error) {
+    console.error(`Scene scan failed; using duration-based sampling: ${error.message}`);
+    return [];
+  }
+}
+
+function sceneSampleTimes(sceneTimes, durationMs, maximum = MAX_VISUAL_FRAMES) {
+  const seconds = Math.max(0, durationMs / 1000);
+  const fallback = sampleTimes(durationMs, maximum);
+  if (!sceneTimes.length || maximum === 1) return fallback;
+  const candidates = [...new Set([0, ...sceneTimes.filter(value => value >= 0 && value < seconds), Math.floor(seconds * 0.98)])]
+    .sort((a, b) => a - b);
+  const targets = fallback;
+  const selected = targets.map(target => candidates.reduce((best, candidate) =>
+    Math.abs(candidate - target) < Math.abs(best - target) ? candidate : best, candidates[0]));
+  return [...new Set(selected)].sort((a, b) => a - b).slice(0, maximum);
 }
 
 async function safeVideoPath(relativePath) {
@@ -248,7 +280,17 @@ async function analyzeVideo(row, apiKey) {
     const { fullPath, stat } = await safeVideoPath(row.relative_path);
     if (`${stat.size}:${Math.round(stat.mtimeMs)}` !== row.fingerprint) throw new Error('Video changed since inventory; scan it again');
     const frames = [];
-    for (const atSeconds of sampleTimes(row.duration_ms)) {
+    const sceneTimes = VISUAL_SCENE_SAMPLING && row.duration_ms ? await detectSceneTimes(fullPath) : [];
+    const selectedTimes = VISUAL_SCENE_SAMPLING
+      ? sceneSampleTimes(sceneTimes, row.duration_ms)
+      : sampleTimes(row.duration_ms);
+    const sampling = {
+      method: VISUAL_SCENE_SAMPLING && sceneTimes.length ? 'scene' : 'duration',
+      scene_scan_enabled: VISUAL_SCENE_SAMPLING,
+      scene_fallback: VISUAL_SCENE_SAMPLING && !sceneTimes.length,
+      sampled_at_seconds: selectedTimes
+    };
+    for (const atSeconds of selectedTimes) {
       try {
         frames.push({ at_seconds: atSeconds, image: await extractFrame(fullPath, atSeconds) });
       } catch (error) {
@@ -278,7 +320,7 @@ async function analyzeVideo(row, apiKey) {
       visual_people_json = @people, visual_events_json = @events,
       visual_places_json = @places, visual_keywords_json = @keywords,
       visual_date_clues_json = @date_clues, visual_search_text = @search_text,
-      visual_evidence_json = @evidence,
+      visual_evidence_json = @evidence, visual_sampling_json = @sampling,
       visual_model = @model, visual_prompt_version = @prompt_version,
       visual_usage_json = @usage, visual_fingerprint = @fingerprint, visual_revision = @revision,
       visual_error = NULL, visual_error_class = NULL, visual_next_attempt_at = NULL,
@@ -289,6 +331,7 @@ async function analyzeVideo(row, apiKey) {
       people: JSON.stringify(result.people), events: JSON.stringify(result.events),
       places: JSON.stringify(result.places), keywords: JSON.stringify(result.keywords),
       date_clues: JSON.stringify(result.date_clues), search_text: searchText, model: MODEL,
+      sampling: JSON.stringify(sampling),
       evidence: JSON.stringify(evidence), prompt_version: PROMPT_VERSION,
       usage: JSON.stringify(usage || {}), revision
       });
@@ -361,6 +404,10 @@ async function analyzeVideo(row, apiKey) {
 }
 
 async function runLocked() {
+  if (getAutomationControl().paused) {
+    setWorkerActivity('visual-analyzer', { phase: 'pausado', result: 'La automatización está pausada; no se inició un análisis visual' });
+    return;
+  }
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) throw new Error('OPENROUTER_API_KEY is required for visual analysis');
   // The exclusive lock proves no visual worker still owns these rows.
@@ -419,6 +466,10 @@ async function runLocked() {
       .all(RETRY_FAILED ? 1 : 0, MAX_VISUAL_ATTEMPTS, batchLimit);
   let attempted = 0;
   for (const row of candidates) {
+    if (getAutomationControl().paused) {
+      setWorkerActivity('visual-analyzer', { phase: 'pausado', result: 'El lote actual terminó antes de tomar el siguiente video' });
+      break;
+    }
     const currentSpend = getVisualMonthlySpend();
     if (MAX_VISUAL_COST_PER_MONTH_USD > 0 && currentSpend >= MAX_VISUAL_COST_PER_MONTH_USD) {
       setWorkerActivity('visual-analyzer', {
@@ -437,6 +488,7 @@ function run() {
   return withJobLock('visual-analyzer', () => {
     setWorkerConfiguration('visual', {
       model: MODEL, max_visual: MAX_VISUAL, max_visual_attempts: MAX_VISUAL_ATTEMPTS,
+      max_visual_frames: MAX_VISUAL_FRAMES, scene_sampling: VISUAL_SCENE_SAMPLING,
       max_visual_requests_per_day: MAX_VISUAL_REQUESTS_PER_DAY,
       max_visual_cost_per_month_usd: MAX_VISUAL_COST_PER_MONTH_USD,
       retry_failed: RETRY_FAILED,

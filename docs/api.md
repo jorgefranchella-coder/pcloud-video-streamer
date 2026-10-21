@@ -86,11 +86,13 @@ Campos principales:
 
 El uso del proveedor se devuelve como texto JSON en `visual_usage_json`. Los campos originales `*_json` también acompañan a sus versiones parseadas; no hay un DTO separado.
 
-Las listas `visual_people`, `visual_events` y `visual_date_clues` contienen objetos `{ "description": "...", "at_seconds": 12 }`. `identified_people` es un objeto con índices de observación como claves, por ejemplo `{ "0": { "id": 7, "name": "Jorge" } }`. No garantiza identidad automática ni correspondencia persistente después de un reanálisis.
+Las listas `visual_people`, `visual_events` y `visual_date_clues` contienen objetos `{ "description": "...", "at_seconds": 12 }`. `visual_sampling` registra método y segundos de los fotogramas que se enviaron en la ficha vigente para poder medir cobertura después. `identified_people` es un objeto con índices de observación como claves, por ejemplo `{ "0": { "id": 7, "name": "Jorge" } }`. No garantiza identidad automática ni correspondencia persistente después de un reanálisis.
 
 ## Progreso
 
 `GET /api/index/status` incluye `worker_configuration.technical` y `worker_configuration.visual` después de que cada etapa haya iniciado. Incluye los límites efectivos, flags de reintento, modo puntual/modelo visual y hora del registro; nunca incluye `OPENROUTER_API_KEY` ni `METADATA_EDIT_TOKEN`.
+
+También devuelve `schema_version` y `applied_migrations`, con las migraciones SQLite numeradas aplicadas.
 
 `GET /api/index/status` devuelve:
 
@@ -119,7 +121,7 @@ Ejemplo basado en la ejecución documentada, no respuesta fija. Las claves de es
 
 `worker_activity` informa si el PID local sigue vivo, heartbeat, etapa y archivo actual sin exponer el PID. No expone estado de systemd ni historial completo de lotes visuales.
 
-`worker_configuration` registra la última configuración no secreta usada por cada etapa (`technical` y `visual`), además de `updated_at`. Si una etapa nunca inició, su entrada no existe. No representa un proceso vivo ni lee cambios posteriores en los archivos de entorno hasta el siguiente arranque.
+`worker_configuration` registra la última configuración no secreta usada por cada etapa (`technical` y `visual`), además de `updated_at`. La configuración visual incluye lote, máximo de fotogramas y si se activó muestreo por escenas. Si una etapa nunca inició, su entrada no existe. No representa un proceso vivo ni lee cambios posteriores en los archivos de entorno hasta el siguiente arranque.
 
 `worker_activity` contiene las claves `indexer` y `visual-analyzer` después de su primer inicio, con `status`, `active`, `stale`, `started_at`, `heartbeat_at`, `current_video_id`, `current_path`, `phase`, `last_result`, `last_error` y `finished_at`. `stale=true` significa que el registro sigue en `running` pero el PID de este mismo host ya no existe.
 
@@ -134,6 +136,8 @@ Ejemplo basado en la ejecución documentada, no respuesta fija. Las claves de es
 `visual_timer` consulta el estado de solo lectura de `pcloud-video-visual.timer`: indica si la unidad existe, está activa/habilitada, el último disparo y la próxima ejecución. Si el host no usa systemd o no se puede consultar, `load_state` es `unknown`; la ruta no activa ni modifica unidades.
 
 `pipeline_timer` da la misma información de `pcloud-video-pipeline.timer`. `pipeline.js` ejecuta inventario técnico y, al completarlo, un lote visual limitado. La unidad y el timer son optativos; habilitarlos puede consumir cuota del proveedor.
+
+`automation_control` informa si el procesamiento está pausado, cuándo y desde qué interfaz se cambió, más los últimos 20 eventos de un historial SQLite limitado a 200 entradas. `POST /api/index/control` recibe `{ "paused": true }` o `false` y requiere `Authorization: Bearer <METADATA_EDIT_TOKEN>`. El control detiene nuevas ejecuciones y evita que el analizador tome otro video; el inventario técnico o la solicitud visual que ya está en curso termina normalmente. El token de edición es compartido y no identifica a un operador individual.
 
 `visual_retry_wait` informa cuántos fallos tienen reintento pendiente y el próximo horario. Los errores transitorios usan espera exponencial hasta 24 horas; `429` comienza en cinco minutos y otros transitorios en un minuto. Cada fingerprint admite hasta `MAX_VISUAL_ATTEMPTS` intentos automáticos (por defecto cinco). Los errores `401`, `403` y otros `4xx` no reciben reintento automático. `RETRY_VISUAL_FAILED=1` es necesario para tomar fallos ya vencidos en una ejecución posterior.
 

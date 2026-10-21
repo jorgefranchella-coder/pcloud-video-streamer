@@ -225,8 +225,15 @@ function asyncRoute(handler) {
 
 app.get('/api/index/status', asyncRoute(async (_req, res) => {
   const [visualTimer, pipelineTimer] = await Promise.all([getVisualTimerStatus(), getPipelineTimerStatus()]);
-  res.json({ ...metadata.status(), visual_timer: visualTimer, pipeline_timer: pipelineTimer });
+  res.json({ ...metadata.status(), visual_timer: visualTimer, pipeline_timer: pipelineTimer,
+    can_control_automation: Boolean(process.env.METADATA_EDIT_TOKEN) });
 }));
+
+app.post('/api/index/control', (req, res) => {
+  if (!authorizeMetadataEdit(req, res)) return;
+  if (typeof req.body?.paused !== 'boolean') return res.status(400).json({ error: 'paused must be a boolean' });
+  res.json({ automation_control: metadata.setAutomationPaused(req.body.paused) });
+});
 
 app.get('/api/people', (_req, res) => {
   res.json({ items: metadata.listPeople(), merges: metadata.listPersonMerges(),

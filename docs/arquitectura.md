@@ -91,6 +91,8 @@ Cada análisis visual recibe `visual_revision`; las asignaciones se ligan a esa 
 
 `process_locks` serializa indexador y analizador visual con un bloqueo común, además del bloqueo propio de cada etapa. Usa PID y nombre de host para identificar al propietario y recuperar registros abandonados en el mismo servidor. `worker_runs` conserva la actividad actual; `worker_run_history` mantiene hasta 200 ejecuciones por etapa. `stale` se infiere cuando el PID local desaparece. La recuperación automática presupone que los procesos usan la misma base SQLite local y el mismo host; no es un coordinador distribuido para bases compartidas entre servidores.
 
+`automation_control` conserva la pausa global de nuevas tareas y `automation_control_history` guarda hasta 200 cambios; los trabajos ya activos terminan. `schema_migrations` registra la versión base y las migraciones numeradas nuevas dentro de la inicialización transaccional. La versión 1 documenta el esquema existente como línea base; la versión 2 agrega el índice para informes mensuales de costo; la versión 3 guarda el plan de muestreo de cada ficha. Parte de las compatibilidades históricas todavía usa cambios idempotentes en el arranque y debe trasladarse a migraciones numeradas en futuras entregas. Al cambiar el fingerprint se elimina el plan de muestreo anterior.
+
 ## Búsqueda e interfaz
 
 FTS5 usa tokenización Unicode con eliminación de diacríticos. Se extraen hasta ocho palabras de la consulta, cada una como prefijo, combinadas con AND. Se filtran fechas inclusivas y se excluyen `missing`. Con consulta, los resultados priorizan relevancia; sin consulta, se ordenan por fecha descendente y ruta. La búsqueda devuelve videos, no segmentos coincidentes.

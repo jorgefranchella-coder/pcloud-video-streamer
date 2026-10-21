@@ -61,6 +61,20 @@ db.exec(`CREATE TABLE IF NOT EXISTS worker_configuration (
   configuration_json TEXT NOT NULL,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 )`);
+db.exec(`CREATE TABLE IF NOT EXISTS automation_control (
+  singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+  paused INTEGER NOT NULL DEFAULT 0 CHECK (paused IN (0, 1)),
+  changed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  changed_by TEXT NOT NULL DEFAULT 'initialization'
+);
+CREATE TABLE IF NOT EXISTS automation_control_history (
+  id INTEGER PRIMARY KEY,
+  paused INTEGER NOT NULL CHECK (paused IN (0, 1)),
+  changed_by TEXT NOT NULL,
+  changed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS automation_control_history_idx ON automation_control_history(id DESC);
+INSERT INTO automation_control (singleton, paused) VALUES (1, 0) ON CONFLICT(singleton) DO NOTHING`);
 db.exec(`CREATE TABLE IF NOT EXISTS worker_runs (
   worker TEXT PRIMARY KEY,
   status TEXT NOT NULL,
@@ -221,8 +235,6 @@ const existingColumns = new Set(db.prepare('PRAGMA table_info(videos)').all().ma
 for (const [name, definition] of Object.entries(visualColumns)) {
   if (!existingColumns.has(name)) db.exec(`ALTER TABLE videos ADD COLUMN ${name} ${definition}`);
 }
-db.exec('CREATE INDEX IF NOT EXISTS videos_visual_analyzed_at_idx ON videos(visual_analyzed_at)');
-
 db.exec(`
   CREATE VIRTUAL TABLE IF NOT EXISTS video_fts USING fts5(
     relative_path, visual_title, visual_summary, visual_search_text,
@@ -369,6 +381,29 @@ const migrateObservations = db.transaction(() => {
     CREATE INDEX IF NOT EXISTS video_person_video_revision_idx ON video_person_observations(video_id, analysis_revision)`);
 });
 migrateObservations.immediate();
+db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
+  version INTEGER PRIMARY KEY,
+  description TEXT NOT NULL,
+  applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+)`);
+const migrationRows = db.prepare('SELECT version FROM schema_migrations ORDER BY version').all();
+if (!migrationRows.length) {
+  db.prepare('INSERT INTO schema_migrations (version, description) VALUES (1, ?)')
+    .run('Baseline of the existing atomic schema bootstrap');
+}
+const currentMigration = db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get().version || 0;
+if (currentMigration < 2) {
+  db.exec('CREATE INDEX IF NOT EXISTS videos_visual_analyzed_at_idx ON videos(visual_analyzed_at)');
+  db.prepare('INSERT INTO schema_migrations (version, description) VALUES (2, ?)')
+    .run('Index visual analysis timestamps for monthly provider cost reports');
+}
+if (currentMigration < 3) {
+  db.exec("ALTER TABLE videos ADD COLUMN visual_sampling_json TEXT NOT NULL DEFAULT '{}'");
+  db.prepare('INSERT INTO schema_migrations (version, description) VALUES (3, ?)')
+    .run('Persist the per-video visual sampling plan for coverage review');
+}
+const finalSchemaVersion = db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get().version;
+db.pragma(`user_version = ${finalSchemaVersion}`);
 db.exec('COMMIT');
 } catch (error) {
   if (db.inTransaction) db.exec('ROLLBACK');
@@ -407,6 +442,7 @@ const upsert = db.prepare(`
     visual_keywords_json = CASE WHEN videos.fingerprint != excluded.fingerprint THEN '[]' ELSE videos.visual_keywords_json END,
     visual_date_clues_json = CASE WHEN videos.fingerprint != excluded.fingerprint THEN '[]' ELSE videos.visual_date_clues_json END,
     visual_evidence_json = CASE WHEN videos.fingerprint != excluded.fingerprint THEN '[]' ELSE videos.visual_evidence_json END,
+    visual_sampling_json = CASE WHEN videos.fingerprint != excluded.fingerprint THEN '{}' ELSE videos.visual_sampling_json END,
     visual_search_text = CASE WHEN videos.fingerprint != excluded.fingerprint THEN '' ELSE videos.visual_search_text END,
     visual_model = CASE WHEN videos.fingerprint != excluded.fingerprint THEN NULL ELSE videos.visual_model END,
     visual_prompt_version = CASE WHEN videos.fingerprint != excluded.fingerprint THEN NULL ELSE videos.visual_prompt_version END,
@@ -434,6 +470,7 @@ function parseVideo(row) {
     visual_keywords: JSON.parse(row.visual_keywords_json),
     visual_date_clues: JSON.parse(row.visual_date_clues_json),
     visual_evidence: JSON.parse(row.visual_evidence_json || '[]'),
+    visual_sampling: JSON.parse(row.visual_sampling_json || '{}'),
     confirmed_people: JSON.parse(row.confirmed_people_json)
   };
 }
@@ -456,6 +493,7 @@ function status() {
   const utcMonth = `${utcDay.slice(0, 7)}-01`;
   const monthlyCost = getVisualMonthlySpend();
   const providerControl = getVisualProviderControl();
+  const automationControl = getAutomationControl();
   const workerHistory = Object.fromEntries(['indexer', 'visual-analyzer'].map(worker => [worker,
     db.prepare(`SELECT id, status, started_at, heartbeat_at, finished_at, last_result, last_error
       FROM worker_run_history WHERE worker = ? ORDER BY id DESC LIMIT 10`).all(worker)
@@ -476,6 +514,8 @@ function status() {
     }];
   }));
   return {
+    schema_version: db.pragma('user_version', { simple: true }),
+    applied_migrations: db.prepare('SELECT version, description, applied_at FROM schema_migrations ORDER BY version').all(),
     counts: Object.fromEntries(counts.map(row => [row.status, row.count])),
     visual_counts: Object.fromEntries(visualCounts.map(row => [row.status, row.count])),
     visual_ready_counts: Object.fromEntries(visualReadyCounts.map(row => [row.status, row.count])),
@@ -488,6 +528,7 @@ function status() {
       utc_month: utcMonth.slice(0, 7), spent_usd: Number(monthlyCost.toFixed(6)),
       limit_usd: monthlyLimit, remaining_usd: monthlyLimit ? Number(Math.max(0, monthlyLimit - monthlyCost).toFixed(6)) : null
     },
+    automation_control: automationControl,
     visual_provider_control: providerControl ? {
       paused: true, error_class: providerControl.error_class, reason: providerControl.reason,
       paused_at: providerControl.paused_at, paused_until: providerControl.paused_until
@@ -521,6 +562,28 @@ function getVisualMonthlySpend() {
         return Number.isFinite(cost) && cost >= 0 ? sum + cost : sum;
       } catch { return sum; }
     }, 0);
+}
+
+function getAutomationControl() {
+  const row = db.prepare('SELECT paused, changed_at, changed_by FROM automation_control WHERE singleton = 1').get();
+  const history = db.prepare(`SELECT paused, changed_by, changed_at FROM automation_control_history
+    ORDER BY id DESC LIMIT 20`).all().map(item => ({ ...item, paused: Boolean(item.paused) }));
+  return { paused: Boolean(row?.paused), changed_at: row?.changed_at || null,
+    changed_by: row?.changed_by || null, history };
+}
+
+function setAutomationPaused(paused, changedBy = 'web') {
+  const value = paused ? 1 : 0;
+  const change = db.transaction(() => {
+    db.prepare(`INSERT INTO automation_control (singleton, paused, changed_by)
+      VALUES (1, ?, ?) ON CONFLICT(singleton) DO UPDATE SET paused = excluded.paused,
+      changed_at = CURRENT_TIMESTAMP, changed_by = excluded.changed_by`).run(value, changedBy);
+    db.prepare('INSERT INTO automation_control_history (paused, changed_by) VALUES (?, ?)').run(value, changedBy);
+    db.prepare('DELETE FROM automation_control_history WHERE id NOT IN
+      (SELECT id FROM automation_control_history ORDER BY id DESC LIMIT 200)').run();
+  });
+  change.immediate();
+  return getAutomationControl();
 }
 
 function getVisualProviderControl() {
@@ -909,5 +972,6 @@ module.exports = {
   dismissStaleIdentification,
   setVideoPerson, renamePerson, mergePeople, undoPeopleMerge, listPersonMerges,
   withJobLock, setWorkerConfiguration, setWorkerActivity, reserveVisualDailyRequest,
-  getVisualProviderControl, setVisualProviderControl, clearVisualProviderControl, getVisualMonthlySpend
+  getVisualProviderControl, setVisualProviderControl, clearVisualProviderControl, getVisualMonthlySpend,
+  getAutomationControl, setAutomationPaused
 };

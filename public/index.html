@@ -98,6 +98,10 @@
             </div>
           </div>
           <p id="effectiveConfiguration" class="mt-2 text-xs text-gray-500">Configuración efectiva: esperando datos</p>
+          <div class="mt-2 flex flex-wrap items-center gap-2">
+            <span id="automationControlStatus" class="text-xs text-gray-400" role="status" aria-live="polite"></span>
+            <button id="automationControlBtn" type="button" class="hidden rounded border border-gray-600 px-2 py-1 text-xs hover:bg-gray-700 disabled:opacity-50">Pausar procesamiento</button>
+          </div>
           <p id="scanProgressStatus" class="mt-2 hidden text-xs text-amber-300"></p>
         </div>
       </section>
