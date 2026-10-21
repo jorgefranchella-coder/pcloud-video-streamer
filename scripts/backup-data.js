@@ -12,6 +12,22 @@ function isWithin(parent, candidate) {
   return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
 }
 
+function assertNoLiveWorkerLocks(db) {
+  const hasLockTable = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'process_locks'").get();
+  if (!hasLockTable) return;
+  const locks = db.prepare('SELECT name, owner_pid, owner_host FROM process_locks').all();
+  for (const lock of locks) {
+    let processIsAlive = true;
+    if (lock.owner_host === os.hostname()) {
+      try { process.kill(lock.owner_pid, 0); }
+      catch (error) { processIsAlive = error.code !== 'ESRCH'; }
+    }
+    if (processIsAlive) {
+      throw new Error(`Cannot back up while ${lock.name} is locked by ${lock.owner_host} (pid ${lock.owner_pid})`);
+    }
+  }
+}
+
 async function lockDownTree(root) {
   await fs.promises.chmod(root, 0o700);
   for (const entry of await fs.promises.readdir(root, { withFileTypes: true })) {
@@ -72,20 +88,7 @@ async function main() {
   const databaseBackupPath = path.join(backupDir, 'videos.sqlite.partial');
   const source = new Database(databasePath, { readonly: true, fileMustExist: true });
   try {
-    const hasLockTable = source.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'process_locks'").get();
-    if (hasLockTable) {
-      const locks = source.prepare('SELECT name, owner_pid, owner_host FROM process_locks').all();
-      for (const lock of locks) {
-        let processIsAlive = true;
-        if (lock.owner_host === os.hostname()) {
-          try { process.kill(lock.owner_pid, 0); }
-          catch (error) { processIsAlive = error.code !== 'ESRCH'; }
-        }
-        if (processIsAlive) {
-          throw new Error(`Cannot back up while ${lock.name} is locked by ${lock.owner_host} (pid ${lock.owner_pid})`);
-        }
-      }
-    }
+    assertNoLiveWorkerLocks(source);
     await source.backup(databaseBackupPath);
   } finally {
     source.close();
@@ -95,7 +98,11 @@ async function main() {
   let staleLocksRemoved = 0;
   try {
     const hasLockTable = backupMutableDb.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'process_locks'").get();
-    if (hasLockTable) staleLocksRemoved = backupMutableDb.prepare('DELETE FROM process_locks').run().changes;
+    if (hasLockTable) {
+      assertNoLiveWorkerLocks(backupMutableDb);
+      staleLocksRemoved = backupMutableDb.prepare('SELECT COUNT(*) AS count FROM process_locks').get().count;
+      backupMutableDb.prepare('DELETE FROM process_locks').run();
+    }
     backupMutableDb.pragma('wal_checkpoint(TRUNCATE)');
     if (backupMutableDb.pragma('journal_mode = DELETE', { simple: true }) !== 'delete') {
       throw new Error('Could not finalize the backup as a standalone SQLite database');
@@ -128,6 +135,10 @@ async function main() {
   } catch (error) {
     if (error.code !== 'ENOENT') throw error;
   }
+
+  const finalSourceCheck = new Database(databasePath, { readonly: true, fileMustExist: true });
+  try { assertNoLiveWorkerLocks(finalSourceCheck); }
+  finally { finalSourceCheck.close(); }
 
   const manifest = {
     created_at: new Date().toISOString(),

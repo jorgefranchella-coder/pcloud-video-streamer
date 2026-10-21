@@ -109,7 +109,7 @@ Respaldar código/configuración, base SQLite, `DATA_DIR/evidence` y credenciale
 
 Las imágenes de evidencia viven en `DATA_DIR/evidence/<video_id>/<revision>`. Además de la revisión activa, se conservan las anteriores mientras tengan identificaciones pendientes. Para respaldar base e imágenes como un conjunto coherente, detener servidor, timers, trabajadores y procesos manuales; anotar cuáles estaban activos para restaurarlos al terminar.
 
-Con WAL activo, no copiar únicamente `videos.sqlite` mientras hay escritores: puede faltar información aún presente en el WAL. El comando genera una copia mediante la API SQLite de la dependencia instalada, verifica su integridad y copia las imágenes con permisos privados. También aborta si detecta un bloqueo de trabajador con PID vivo en este host o un bloqueo registrado en otro host; limpia de la copia los bloqueos locales abandonados para que no queden atados a PID/host viejos. Ejecutarlo desde la raíz del proyecto:
+Con WAL activo, no copiar únicamente `videos.sqlite` mientras hay escritores: puede faltar información aún presente en el WAL. El comando genera una copia mediante la API SQLite de la dependencia instalada, verifica su integridad y copia las imágenes con permisos privados. Comprueba los bloqueos antes de tomar la instantánea, dentro de la copia y nuevamente al terminar de copiar las evidencias. Aborta si detecta un bloqueo de trabajador con PID vivo en este host o un bloqueo registrado en otro host; limpia de la copia únicamente los bloqueos locales abandonados para que no queden atados a PID/host viejos. Ejecutarlo desde la raíz del proyecto:
 
 ```bash
 sudo systemctl stop pcloud-video-indexer.timer pcloud-video-visual.timer
