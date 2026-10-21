@@ -20,6 +20,9 @@ const ACCESS_COOKIE_MAX_AGE = 12 * 60 * 60;
 if (ACCESS_TOKEN && Buffer.byteLength(ACCESS_TOKEN) < 32) {
   throw new Error('ACCESS_TOKEN must contain at least 32 bytes');
 }
+if (process.env.METADATA_EDIT_TOKEN && Buffer.byteLength(process.env.METADATA_EDIT_TOKEN) < 32) {
+  throw new Error('METADATA_EDIT_TOKEN must contain at least 32 bytes');
+}
 const ALLOWED_ORIGINS = new Set((process.env.CORS_ORIGINS || '').split(',').map(value => value.trim()).filter(Boolean).map(value => {
   let parsed;
   try { parsed = new URL(value); } catch { throw new Error(`Invalid CORS_ORIGINS entry: ${value}`); }
