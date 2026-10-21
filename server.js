@@ -570,6 +570,12 @@ function isVideoFile(filename) {
 const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`Video root: ${VIDEO_ROOT}`);
+  if (!ACCESS_TOKEN) {
+    console.warn('WARNING: ACCESS_TOKEN is not configured; API and video streaming are unauthenticated');
+  }
+  if (!process.env.METADATA_EDIT_TOKEN) {
+    console.warn('WARNING: METADATA_EDIT_TOKEN is not configured; identity editing is disabled');
+  }
 });
 
 let shuttingDown = false;
