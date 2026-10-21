@@ -10,6 +10,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const VIDEO_ROOT = process.env.VIDEO_ROOT || '/mnt/pcloud/My Videos';
 const ROOT_RESOLVED = path.resolve(VIDEO_ROOT);
+const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(__dirname, 'data'));
 const ACCESS_TOKEN = process.env.ACCESS_TOKEN || '';
 const ACCESS_COOKIE = 'pcloud_video_session';
 const ACCESS_COOKIE_MAX_AGE = 12 * 60 * 60;
@@ -144,6 +145,39 @@ app.get('/api/metadata', (req, res) => {
     stale_identifications: metadata.staleIdentificationsForVideo(row.id),
     can_edit_people: Boolean(process.env.METADATA_EDIT_TOKEN)
   });
+});
+
+app.get('/api/metadata/evidence', async (req, res) => {
+  const relativePath = req.query.path;
+  const revision = req.query.revision;
+  const atSeconds = typeof req.query.at_seconds === 'string' && /^(0|[1-9]\d{0,5})$/.test(req.query.at_seconds)
+    ? Number(req.query.at_seconds) : NaN;
+  if (typeof relativePath !== 'string' || !safeResolve(relativePath) ||
+      typeof revision !== 'string' || !/^[0-9a-f-]{36}$/i.test(revision) || !Number.isSafeInteger(atSeconds)) {
+    return res.status(400).json({ error: 'Invalid evidence request' });
+  }
+  const row = metadata.getByPath.get(relativePath);
+  if (!row || row.visual_status !== 'done' || row.visual_revision !== revision || row.visual_fingerprint !== row.fingerprint) {
+    return res.status(404).json({ error: 'Evidence not found' });
+  }
+  let evidence;
+  try { evidence = JSON.parse(row.visual_evidence_json || '[]'); }
+  catch { evidence = []; }
+  if (!evidence.some(item => item.at_seconds === atSeconds)) return res.status(404).json({ error: 'Evidence not found' });
+  const imagePath = path.join(DATA_DIR, 'evidence', String(row.id), revision, `${atSeconds}.jpg`);
+  try {
+    const stat = await fs.promises.stat(imagePath);
+    if (!stat.isFile() || stat.size > 700000) return res.status(404).json({ error: 'Evidence not found' });
+    res.setHeader('Content-Type', 'image/jpeg');
+    res.setHeader('Content-Length', stat.size);
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    pipeFileStream(imagePath, {}, res);
+  } catch (error) {
+    if (error.code === 'ENOENT') return res.status(404).json({ error: 'Evidence not found' });
+    console.error('Evidence access error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
 function authorizeMetadataEdit(req, res) {

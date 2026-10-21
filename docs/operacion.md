@@ -105,7 +105,9 @@ Esta ejecución no cambia el estado de la unidad systemd. El analizador visual t
 
 ## Respaldo
 
-Respaldar código/configuración, base SQLite y credenciales de rclone/proveedor por canales apropiados para cada contenido. Los originales de video son una fuente separada. La caché VFS y `node_modules` se pueden reconstruir; las confirmaciones manuales de personas no se recuperan simplemente volviendo a analizar.
+Respaldar código/configuración, base SQLite, `DATA_DIR/evidence` y credenciales de rclone/proveedor por canales apropiados para cada contenido. Los originales de video son una fuente separada. La caché VFS y `node_modules` se pueden reconstruir; las confirmaciones manuales de personas no se recuperan simplemente volviendo a analizar.
+
+Las imágenes de evidencia viven en `DATA_DIR/evidence/<video_id>/<revision>` y se conservan solo para la revisión visual vigente después de un análisis exitoso. Para respaldar base e imágenes como un conjunto coherente, detener los dos servicios de lote, ejecutar el backup SQLite y copiar ese directorio bajo permisos privados; iniciar nuevamente los servicios al terminar.
 
 Con WAL activo, no copiar únicamente `videos.sqlite` mientras hay escritores: puede faltar información aún presente en el WAL. Desde la raíz del proyecto, una copia consistente puede crearse mediante la API de backup de la dependencia instalada:
 

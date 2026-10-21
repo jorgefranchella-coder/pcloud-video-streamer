@@ -20,6 +20,7 @@ Errores comunes de edición: `503` si no se configuró el token, `401` si no coi
 | `GET /api/list` | `path` opcional, raíz por defecto; lista carpetas y extensiones reconocidas |
 | `GET /api/stream` | `path` obligatorio; entrega archivo, acepta rango simple |
 | `GET /api/metadata` | `path` obligatorio; ficha del índice |
+| `GET /api/metadata/evidence` | `path`, `revision`, `at_seconds`; JPEG de evidencia de la revisión activa |
 | `GET /api/index/status` | Conteos, último recorrido y configuración efectiva no secreta registrada por cada trabajador |
 | `GET /api/search` | `q`, `from`, `to`, `person_id`, `folder`, `limit`, `offset` |
 | `GET /api/people` | Catálogo de nombres y cantidades |
@@ -63,6 +64,8 @@ La implementación acepta un rango simple `bytes=inicio-fin`, `bytes=inicio-` o 
 
 `GET /api/metadata?path=...` devuelve la fila de `videos`, más las versiones parseadas de sus JSON, `identified_people`, `stale_identifications` y `can_edit_people`. Las identidades de una revisión anterior aparecen en `stale_identifications` para revisión manual; nunca se aplican automáticamente a la nueva lista. Al reasignar una de ellas desde la interfaz, `PUT /api/metadata/person` envía además `stale_observation: { "analysis_revision": "...", "observation_index": 0 }`. El servidor verifica y marca como revisada esa asignación anterior en la misma transacción que guarda la nueva. El registro histórico se conserva, pero deja de aparecer como pendiente. Un archivo puede existir en el montaje y devolver `404` aquí si todavía no está indexado. Ruta inválida: `400`.
 
+`visual_evidence` contiene los segundos de los fotogramas persistidos para respaldar personas, eventos o pistas de fecha. `GET /api/metadata/evidence?path=...&revision=...&at_seconds=...` devuelve un JPEG solo si la revisión sigue vigente y el segundo está registrado en esa ficha. La ruta requiere la misma sesión de acceso que la ficha; una revisión anterior o evidencia ausente devuelve `404`.
+
 Campos principales:
 
 | Grupo | Campos |
@@ -71,7 +74,7 @@ Campos principales:
 | Técnico | `duration_ms`, `width`, `height`, `codec`, `technical` |
 | Fecha | `recorded_at`, `date_precision`, `date_source`, `date_candidates` |
 | Visual | `visual_status`, `visual_title`, `visual_summary`, `visual_uncertainty`, `visual_error`, `visual_attempts`, `visual_next_attempt_at`, `visual_error_class` |
-| Contenido visual | `visual_people`, `visual_events`, `visual_places`, `visual_keywords`, `visual_date_clues` |
+| Contenido visual | `visual_people`, `visual_events`, `visual_places`, `visual_keywords`, `visual_date_clues`, `visual_evidence` |
 | Procedencia | `visual_model`, `visual_prompt_version`, `visual_usage_json`, `visual_fingerprint`, `visual_analyzed_at`, `visual_revision` |
 | Confirmaciones | `confirmed_people`, `identified_people`, `stale_identifications`, `can_edit_people` |
 

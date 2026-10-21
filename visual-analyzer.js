@@ -11,6 +11,7 @@ const { visualConfiguration } = require('./config');
 
 const execFileAsync = promisify(execFile);
 const VIDEO_ROOT = path.resolve(process.env.VIDEO_ROOT || '/mnt/pcloud/My Videos');
+const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(__dirname, 'data'));
 const CONFIG = visualConfiguration();
 const MODEL = CONFIG.visual_model;
 const API_URL = process.env.OPENROUTER_API_URL || 'https://openrouter.ai/api/v1/chat/completions';
@@ -109,6 +110,41 @@ function normalizeResult(result, frames) {
   };
 }
 
+async function persistEvidence(videoId, revision, frames, result) {
+  const usedSeconds = [...new Set([
+    ...result.people, ...result.events, ...result.date_clues
+  ].map(item => item.at_seconds))];
+  const frameBySecond = new Map(frames.map(frame => [frame.at_seconds, frame]));
+  const evidence = usedSeconds.filter(seconds => frameBySecond.has(seconds)).map(at_seconds => ({ at_seconds }));
+  if (!evidence.length) return [];
+
+  const parent = path.join(DATA_DIR, 'evidence', String(videoId));
+  const staging = path.join(parent, `.${revision}.tmp`);
+  const destination = path.join(parent, revision);
+  await fs.promises.mkdir(staging, { recursive: true, mode: 0o700 });
+  try {
+    for (const { at_seconds } of evidence) {
+      await fs.promises.writeFile(path.join(staging, `${at_seconds}.jpg`), frameBySecond.get(at_seconds).image, { mode: 0o600, flag: 'wx' });
+    }
+    await fs.promises.rename(staging, destination);
+    return evidence;
+  } catch (error) {
+    await fs.promises.rm(staging, { recursive: true, force: true }).catch(() => {});
+    throw error;
+  }
+}
+
+async function removeOldEvidence(videoId, keepRevision) {
+  const parent = path.join(DATA_DIR, 'evidence', String(videoId));
+  try {
+    const entries = await fs.promises.readdir(parent, { withFileTypes: true });
+    await Promise.all(entries.filter(entry => entry.isDirectory() && entry.name !== keepRevision)
+      .map(entry => fs.promises.rm(path.join(parent, entry.name), { recursive: true, force: true })));
+  } catch (error) {
+    if (error.code !== 'ENOENT') console.error(`Evidence cleanup failed for video ${videoId}: ${error.message}`);
+  }
+}
+
 async function describeFrames(frames, apiKey) {
   const content = [{ type: 'text', text: 'Estas son imágenes puntuales del mismo video, en orden temporal. Usa el índice de cada fotograma para respaldar eventos, personas y pistas de fecha.' }];
   for (const [index, frame] of frames.entries()) {
@@ -196,12 +232,19 @@ async function analyzeVideo(row, apiKey) {
       confirmedPeople: JSON.parse(row.confirmed_people_json)
     });
     const revision = crypto.randomUUID();
+    let evidence = [];
+    try {
+      evidence = await persistEvidence(row.id, revision, frames, result);
+    } catch (error) {
+      console.error(`Evidence storage failed for video ${row.id}: ${error.message}`);
+    }
     const persistResult = db.transaction(() => {
       const updated = db.prepare(`UPDATE videos SET visual_status = 'done', visual_title = @title,
       visual_summary = @summary, visual_uncertainty = @uncertainty,
       visual_people_json = @people, visual_events_json = @events,
       visual_places_json = @places, visual_keywords_json = @keywords,
       visual_date_clues_json = @date_clues, visual_search_text = @search_text,
+      visual_evidence_json = @evidence,
       visual_model = @model, visual_prompt_version = @prompt_version,
       visual_usage_json = @usage, visual_fingerprint = @fingerprint, visual_revision = @revision,
       visual_error = NULL, visual_error_class = NULL, visual_next_attempt_at = NULL,
@@ -212,11 +255,13 @@ async function analyzeVideo(row, apiKey) {
       people: JSON.stringify(result.people), events: JSON.stringify(result.events),
       places: JSON.stringify(result.places), keywords: JSON.stringify(result.keywords),
       date_clues: JSON.stringify(result.date_clues), search_text: searchText, model: MODEL,
-      prompt_version: PROMPT_VERSION, usage: JSON.stringify(usage || {}), revision
+      evidence: JSON.stringify(evidence), prompt_version: PROMPT_VERSION,
+      usage: JSON.stringify(usage || {}), revision
       });
       if (!updated.changes) throw new Error('Video changed in the index during analysis');
     });
     persistResult();
+    await removeOldEvidence(row.id, revision);
     setWorkerActivity('visual-analyzer', { phase: null, result: `Ficha visual guardada para ${row.relative_path}` });
     console.log(JSON.stringify({ video_id: row.id, frames: frames.length, model: MODEL, usage }));
   } catch (error) {

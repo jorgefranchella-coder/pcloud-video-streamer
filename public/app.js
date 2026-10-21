@@ -737,8 +737,8 @@ function renderVisualMetadata(item) {
   visualSummary.textContent = item.visual_summary || '';
   visualUncertainty.textContent = item.visual_uncertainty ? `Límites de la descripción: ${item.visual_uncertainty}` : 'Descripción basada en fotogramas puntuales.';
   renderIdentityAssignments(item);
-  renderTimedList(visualEvents, 'Momentos observados', item.visual_events);
-  renderTimedList(visualDateClues, 'Pistas de fecha visibles', item.visual_date_clues);
+  renderTimedList(visualEvents, 'Momentos observados', item.visual_events, item);
+  renderTimedList(visualDateClues, 'Pistas de fecha visibles', item.visual_date_clues, item);
   visualPlaces.textContent = item.visual_places?.length ? `Lugares o entornos: ${item.visual_places.join(', ')}` : '';
 }
 
@@ -825,6 +825,7 @@ function renderIdentityAssignments(item) {
       videoPlayer.play().catch(() => {});
     });
     row.appendChild(seek);
+    appendEvidenceThumbnail(row, item, observation.at_seconds, observation.description);
 
     const assigned = item.identified_people?.[index];
     if (!item.can_edit_people) {
@@ -871,14 +872,39 @@ function renderIdentityAssignments(item) {
   });
 }
 
-function renderTimedList(container, label, items) {
+function appendEvidenceThumbnail(container, item, atSeconds, description) {
+  if (!item.visual_evidence?.some(evidence => evidence.at_seconds === atSeconds)) return;
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'col-span-full justify-self-start rounded border border-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400';
+  button.setAttribute('aria-label', `Ampliar fotograma de evidencia: ${description}`);
+  const image = document.createElement('img');
+  image.className = 'h-20 w-32 rounded object-contain bg-black';
+  image.loading = 'lazy';
+  image.alt = `Fotograma de evidencia en el segundo ${atSeconds}: ${description}`;
+  const params = new URLSearchParams({ path: item.relative_path, revision: item.visual_revision, at_seconds: String(atSeconds) });
+  image.src = `${API_BASE}/api/metadata/evidence?${params}`;
+  button.appendChild(image);
+  button.addEventListener('click', () => {
+    const expanded = image.classList.toggle('max-h-80');
+    image.classList.toggle('h-20', !expanded);
+    image.classList.toggle('w-32', !expanded);
+    image.classList.toggle('max-w-full', expanded);
+    image.classList.toggle('object-contain', true);
+    button.setAttribute('aria-label', `${expanded ? 'Reducir' : 'Ampliar'} fotograma de evidencia: ${description}`);
+  });
+  container.appendChild(button);
+}
+
+function renderTimedList(container, label, items, videoItem) {
   container.replaceChildren();
   if (!items?.length) return;
   const heading = document.createElement('strong');
   heading.textContent = `${label}: `;
   container.appendChild(heading);
-  items.forEach((item, index) => {
-    if (index) container.appendChild(document.createTextNode(' · '));
+  items.forEach(item => {
+    const entry = document.createElement('div');
+    entry.className = 'mb-2 flex flex-wrap items-center gap-x-2 gap-y-1';
     const button = document.createElement('button');
     button.className = 'text-blue-300 hover:text-white underline';
     button.textContent = `${item.description} (${Math.floor(item.at_seconds / 60)}:${String(item.at_seconds % 60).padStart(2, '0')})`;
@@ -886,7 +912,9 @@ function renderTimedList(container, label, items) {
       videoPlayer.currentTime = item.at_seconds;
       videoPlayer.play().catch(() => {});
     });
-    container.appendChild(button);
+    entry.appendChild(button);
+    appendEvidenceThumbnail(entry, videoItem, item.at_seconds, item.description);
+    container.appendChild(entry);
   });
 }
 

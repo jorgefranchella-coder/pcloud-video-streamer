@@ -68,6 +68,7 @@ Archivo: `DATA_DIR/videos.sqlite`. Se habilitan WAL, claves foráneas y espera d
 | `worker_run_history` | Historial acotado a 200 ejecuciones recientes por etapa |
 | `visual_daily_requests` | Solicitudes visuales iniciadas por día UTC |
 | `visual_provider_control` | Pausa persistente por error de configuración o espera de proveedor |
+| `DATA_DIR/evidence/<video_id>/<revision>/*.jpg` | Fotogramas usados como evidencia; solo los de la revisión activa se sirven por la API autenticada |
 | `worker_configuration` | Configuración efectiva no secreta registrada por cada etapa |
 | `people` | ID, nombre único con colación SQLite `NOCASE`, creación |
 | `video_person_observations` | Clave `(video_id, analysis_revision, observation_index)`, descripción/segundo observados, persona, confirmación y fecha opcional de revisión; conserva identidades anteriores sin asignarlas a otra ficha |

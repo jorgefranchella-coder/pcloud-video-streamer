@@ -195,6 +195,7 @@ const visualColumns = {
   visual_places_json: "TEXT NOT NULL DEFAULT '[]'",
   visual_keywords_json: "TEXT NOT NULL DEFAULT '[]'",
   visual_date_clues_json: "TEXT NOT NULL DEFAULT '[]'",
+  visual_evidence_json: "TEXT NOT NULL DEFAULT '[]'",
   visual_search_text: "TEXT NOT NULL DEFAULT ''",
   visual_model: 'TEXT',
   visual_prompt_version: 'TEXT',
@@ -314,6 +315,7 @@ const upsert = db.prepare(`
     visual_places_json = CASE WHEN videos.fingerprint != excluded.fingerprint THEN '[]' ELSE videos.visual_places_json END,
     visual_keywords_json = CASE WHEN videos.fingerprint != excluded.fingerprint THEN '[]' ELSE videos.visual_keywords_json END,
     visual_date_clues_json = CASE WHEN videos.fingerprint != excluded.fingerprint THEN '[]' ELSE videos.visual_date_clues_json END,
+    visual_evidence_json = CASE WHEN videos.fingerprint != excluded.fingerprint THEN '[]' ELSE videos.visual_evidence_json END,
     visual_search_text = CASE WHEN videos.fingerprint != excluded.fingerprint THEN '' ELSE videos.visual_search_text END,
     visual_model = CASE WHEN videos.fingerprint != excluded.fingerprint THEN NULL ELSE videos.visual_model END,
     visual_prompt_version = CASE WHEN videos.fingerprint != excluded.fingerprint THEN NULL ELSE videos.visual_prompt_version END,
@@ -340,6 +342,7 @@ function parseVideo(row) {
     visual_places: JSON.parse(row.visual_places_json),
     visual_keywords: JSON.parse(row.visual_keywords_json),
     visual_date_clues: JSON.parse(row.visual_date_clues_json),
+    visual_evidence: JSON.parse(row.visual_evidence_json || '[]'),
     confirmed_people: JSON.parse(row.confirmed_people_json)
   };
 }
