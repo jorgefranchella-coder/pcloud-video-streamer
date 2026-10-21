@@ -67,7 +67,7 @@ Campos principales:
 | Identidad y estado | `id`, `relative_path`, `fingerprint`, `size_bytes`, `mtime_ms`, `status`, `error` |
 | Técnico | `duration_ms`, `width`, `height`, `codec`, `technical` |
 | Fecha | `recorded_at`, `date_precision`, `date_source`, `date_candidates` |
-| Visual | `visual_status`, `visual_title`, `visual_summary`, `visual_uncertainty`, `visual_error` |
+| Visual | `visual_status`, `visual_title`, `visual_summary`, `visual_uncertainty`, `visual_error`, `visual_attempts`, `visual_next_attempt_at`, `visual_error_class` |
 | Contenido visual | `visual_people`, `visual_events`, `visual_places`, `visual_keywords`, `visual_date_clues` |
 | Procedencia | `visual_model`, `visual_prompt_version`, `visual_usage_json`, `visual_fingerprint`, `visual_analyzed_at`, `visual_revision` |
 | Confirmaciones | `confirmed_people`, `identified_people`, `stale_identifications`, `can_edit_people` |
@@ -108,6 +108,8 @@ Ejemplo basado en la ejecución documentada, no respuesta fija. Las claves de es
 No se exponen PID, estado de systemd, archivo actualmente procesado, próxima ejecución ni historial de lotes visuales.
 
 `worker_configuration` registra la última configuración no secreta usada por cada etapa (`technical` y `visual`), además de `updated_at`. Si una etapa nunca inició, su entrada no existe. No representa un proceso vivo ni lee cambios posteriores en los archivos de entorno hasta el siguiente arranque.
+
+`visual_retry_wait` informa cuántos fallos tienen reintento pendiente y el próximo horario. Los errores transitorios usan espera exponencial hasta 24 horas; `429` comienza en cinco minutos y otros transitorios en un minuto. Cada fingerprint admite hasta `MAX_VISUAL_ATTEMPTS` intentos automáticos (por defecto cinco). Los errores `401`, `403` y otros `4xx` no reciben reintento automático. `RETRY_VISUAL_FAILED=1` es necesario para tomar fallos ya vencidos en una ejecución posterior.
 
 ## Búsqueda
 

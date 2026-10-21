@@ -13,6 +13,7 @@ const MODEL = CONFIG.visual_model;
 const API_URL = process.env.OPENROUTER_API_URL || 'https://openrouter.ai/api/v1/chat/completions';
 const PROMPT_VERSION = 'visual-v2';
 const MAX_VISUAL = CONFIG.max_visual;
+const MAX_VISUAL_ATTEMPTS = CONFIG.max_visual_attempts;
 const RETRY_FAILED = CONFIG.retry_visual_failed;
 const TARGET_ID = CONFIG.visual_video_id;
 
@@ -147,7 +148,11 @@ async function describeFrames(frames, apiKey) {
 }
 
 async function analyzeVideo(row, apiKey) {
-  db.prepare("UPDATE videos SET visual_status = 'running', visual_error = NULL WHERE id = ?").run(row.id);
+  const claim = db.prepare(`UPDATE videos SET visual_status = 'running', visual_error = NULL,
+      visual_attempts = visual_attempts + 1, visual_next_attempt_at = NULL, visual_error_class = NULL
+    WHERE id = ? AND fingerprint = ? AND status = 'done' RETURNING visual_attempts`).get(row.id, row.fingerprint);
+  if (!claim) return;
+  const attemptNumber = claim.visual_attempts;
   try {
     const { fullPath, stat } = await safeVideoPath(row.relative_path);
     if (`${stat.size}:${Math.round(stat.mtimeMs)}` !== row.fingerprint) throw new Error('Video changed since inventory; scan it again');
@@ -177,7 +182,8 @@ async function analyzeVideo(row, apiKey) {
       visual_date_clues_json = @date_clues, visual_search_text = @search_text,
       visual_model = @model, visual_prompt_version = @prompt_version,
       visual_usage_json = @usage, visual_fingerprint = @fingerprint, visual_revision = @revision,
-      visual_error = NULL, visual_analyzed_at = CURRENT_TIMESTAMP
+      visual_error = NULL, visual_error_class = NULL, visual_next_attempt_at = NULL,
+      visual_analyzed_at = CURRENT_TIMESTAMP
       WHERE id = @id AND fingerprint = @fingerprint`).run({
       id: row.id, fingerprint: row.fingerprint, title: result.title, summary: result.summary,
       uncertainty: result.uncertainty,
@@ -191,10 +197,30 @@ async function analyzeVideo(row, apiKey) {
     persistResult();
     console.log(JSON.stringify({ video_id: row.id, frames: frames.length, model: MODEL, usage }));
   } catch (error) {
-    db.prepare("UPDATE videos SET visual_status = 'failed', visual_error = ? WHERE id = ? AND fingerprint = ?")
-      .run(String(error.message).slice(0, 1000), row.id, row.fingerprint);
+    const message = String(error.message).slice(0, 1000);
+    const authenticationFailure = /^OpenRouter HTTP (401|403)\b/.test(message);
+    const providerRateLimit = /^OpenRouter HTTP 429\b/.test(message);
+    const providerServerFailure = /^OpenRouter HTTP 5\d\d\b/.test(message);
+    const permanentFailure = (/^OpenRouter HTTP 4\d\d\b/.test(message) && !providerRateLimit) ||
+      message.startsWith('OpenRouter refusal:') || message.startsWith('Invalid model response:') ||
+      message.includes('Video changed');
+    const retryable = !permanentFailure;
+    const exhausted = retryable && attemptNumber >= MAX_VISUAL_ATTEMPTS;
+    const baseDelaySeconds = providerRateLimit ? 300 : 60;
+    const delaySeconds = retryable && !exhausted
+      ? Math.min(baseDelaySeconds * (2 ** Math.min(attemptNumber - 1, 10)), 86400)
+      : null;
+    const retryAt = delaySeconds == null ? null : new Date(Date.now() + delaySeconds * 1000)
+      .toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, '');
+    const errorClass = authenticationFailure ? 'provider_auth'
+      : providerRateLimit ? 'provider_rate_limit'
+        : providerServerFailure ? 'provider_unavailable'
+          : exhausted ? 'attempt_limit' : permanentFailure ? 'permanent' : 'transient';
+    db.prepare(`UPDATE videos SET visual_status = 'failed', visual_error = ?, visual_error_class = ?,
+        visual_next_attempt_at = ? WHERE id = ? AND fingerprint = ? AND visual_status = 'running'`)
+      .run(message, errorClass, retryAt, row.id, row.fingerprint);
     console.error(`Visual analysis failed for video ${row.id}: ${error.message}`);
-    if (/^OpenRouter HTTP (401|403|429|5\d\d)/.test(error.message)) throw error;
+    if (authenticationFailure || providerRateLimit || providerServerFailure) throw error;
   }
 }
 
@@ -202,13 +228,18 @@ async function runLocked() {
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) throw new Error('OPENROUTER_API_KEY is required for visual analysis');
   // The exclusive lock proves no visual worker still owns these rows.
-  db.prepare("UPDATE videos SET visual_status = 'pending' WHERE visual_status = 'running'").run();
+  db.prepare(`UPDATE videos SET visual_status = 'failed', visual_error = 'El trabajador se interrumpió durante el análisis',
+      visual_error_class = CASE WHEN visual_attempts >= ? THEN 'attempt_limit' ELSE 'worker_interrupted' END,
+      visual_next_attempt_at = CASE WHEN visual_attempts >= ? THEN NULL ELSE datetime(CURRENT_TIMESTAMP, '+1 minute') END
+    WHERE visual_status = 'running'`).run(MAX_VISUAL_ATTEMPTS, MAX_VISUAL_ATTEMPTS);
   const candidates = Number.isInteger(TARGET_ID) && TARGET_ID > 0
     ? db.prepare("SELECT id, relative_path, fingerprint, duration_ms, confirmed_people_json FROM videos WHERE id = ? AND status = 'done'").all(TARGET_ID)
     : db.prepare(`SELECT id, relative_path, fingerprint, duration_ms, confirmed_people_json FROM videos
         WHERE status = 'done' AND (visual_status IS NULL OR visual_status = 'pending'
-          OR (visual_status = 'failed' AND ? = 1))
-        ORDER BY id LIMIT ?`).all(RETRY_FAILED ? 1 : 0, MAX_VISUAL);
+          OR (visual_status = 'failed' AND ? = 1 AND visual_next_attempt_at IS NOT NULL
+            AND visual_next_attempt_at <= CURRENT_TIMESTAMP AND visual_attempts < ?))
+        ORDER BY CASE WHEN visual_status = 'pending' OR visual_status IS NULL THEN 0 ELSE 1 END, id LIMIT ?`)
+      .all(RETRY_FAILED ? 1 : 0, MAX_VISUAL_ATTEMPTS, MAX_VISUAL);
   for (const row of candidates) await analyzeVideo(row, apiKey);
   console.log(`Visual batch: ${candidates.length} video(s) attempted`);
 }
@@ -216,7 +247,8 @@ async function runLocked() {
 function run() {
   return withJobLock('visual-analyzer', () => {
     setWorkerConfiguration('visual', {
-      model: MODEL, max_visual: MAX_VISUAL, retry_failed: RETRY_FAILED,
+      model: MODEL, max_visual: MAX_VISUAL, max_visual_attempts: MAX_VISUAL_ATTEMPTS,
+      retry_failed: RETRY_FAILED,
       video_id: Number.isInteger(TARGET_ID) ? TARGET_ID : null
     });
     return runLocked();

@@ -99,6 +99,9 @@ const visualColumns = {
   visual_usage_json: "TEXT NOT NULL DEFAULT '{}'",
   visual_fingerprint: 'TEXT',
   visual_error: 'TEXT',
+  visual_attempts: 'INTEGER NOT NULL DEFAULT 0',
+  visual_next_attempt_at: 'TEXT',
+  visual_error_class: 'TEXT',
   visual_analyzed_at: 'TEXT',
   visual_revision: 'TEXT',
   confirmed_people_json: "TEXT NOT NULL DEFAULT '[]'"
@@ -209,6 +212,9 @@ const upsert = db.prepare(`
     visual_prompt_version = CASE WHEN videos.fingerprint != excluded.fingerprint THEN NULL ELSE videos.visual_prompt_version END,
     visual_fingerprint = CASE WHEN videos.fingerprint != excluded.fingerprint THEN NULL ELSE videos.visual_fingerprint END,
     visual_error = CASE WHEN videos.fingerprint != excluded.fingerprint THEN NULL ELSE videos.visual_error END,
+    visual_attempts = CASE WHEN videos.fingerprint != excluded.fingerprint THEN 0 ELSE videos.visual_attempts END,
+    visual_next_attempt_at = CASE WHEN videos.fingerprint != excluded.fingerprint THEN NULL ELSE videos.visual_next_attempt_at END,
+    visual_error_class = CASE WHEN videos.fingerprint != excluded.fingerprint THEN NULL ELSE videos.visual_error_class END,
     visual_usage_json = CASE WHEN videos.fingerprint != excluded.fingerprint THEN '{}' ELSE videos.visual_usage_json END,
     visual_analyzed_at = CASE WHEN videos.fingerprint != excluded.fingerprint THEN NULL ELSE videos.visual_analyzed_at END,
     confirmed_people_json = CASE WHEN videos.fingerprint != excluded.fingerprint THEN '[]' ELSE videos.confirmed_people_json END,
@@ -236,12 +242,17 @@ function status() {
   const scan = db.prepare('SELECT * FROM scans ORDER BY id DESC LIMIT 1').get();
   const visualCounts = db.prepare("SELECT COALESCE(visual_status, 'pending') AS status, COUNT(*) AS count FROM videos WHERE status != 'missing' GROUP BY COALESCE(visual_status, 'pending')").all();
   const visualReadyCounts = db.prepare("SELECT COALESCE(visual_status, 'pending') AS status, COUNT(*) AS count FROM videos WHERE status = 'done' GROUP BY COALESCE(visual_status, 'pending')").all();
+  const visualRetryWait = db.prepare(`SELECT COUNT(*) AS count,
+      SUM(CASE WHEN visual_next_attempt_at <= CURRENT_TIMESTAMP THEN 1 ELSE 0 END) AS ready_count,
+      MIN(CASE WHEN visual_next_attempt_at > CURRENT_TIMESTAMP THEN visual_next_attempt_at END) AS next_at
+    FROM videos WHERE visual_status = 'failed' AND visual_next_attempt_at IS NOT NULL`).get();
   const workerConfiguration = Object.fromEntries(db.prepare('SELECT worker, configuration_json, updated_at FROM worker_configuration')
     .all().map(row => [row.worker, { ...JSON.parse(row.configuration_json), updated_at: row.updated_at }]));
   return {
     counts: Object.fromEntries(counts.map(row => [row.status, row.count])),
     visual_counts: Object.fromEntries(visualCounts.map(row => [row.status, row.count])),
     visual_ready_counts: Object.fromEntries(visualReadyCounts.map(row => [row.status, row.count])),
+    visual_retry_wait: visualRetryWait,
     last_scan: scan || null,
     worker_configuration: workerConfiguration
   };

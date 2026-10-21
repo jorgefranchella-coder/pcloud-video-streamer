@@ -90,7 +90,7 @@ Esta ejecución no cambia el estado de la unidad systemd. El analizador visual t
 | Solo una ficha visual por ejecución | Ver tamaño efectivo del lote y selector `VISUAL_VIDEO_ID`; leer el contador `Visual batch` del registro. No asumir una causa sin revisar configuración |
 | Muchas fichas visuales pendientes | Solo son elegibles las técnicas `done`. No hay encadenamiento ni timer visual |
 | `401` / `403` del proveedor | Revisar credencial, acceso y configuración desde el archivo protegido; no compartir la clave |
-| `429` | El lote se detiene. Consultar la cuota de la cuenta y reintentar después; no hay backoff automático |
+| `429` | El lote se detiene y la ficha recibe una espera exponencial (inicia en cinco minutos, máximo 24 horas). Consultar la cuota; el siguiente arranque solo la toma cuando vence el plazo y `RETRY_VISUAL_FAILED=1` |
 | JSON inválido o esquema incompatible | Revisar `visual_error`; el proveedor debe aceptar imágenes y salida estructurada. Reintentar de forma acotada o revisar el modelo |
 | `ffprobe` o `ffmpeg` lento | Ver montaje, caché y archivo actual. Un timeout de proceso no garantiza respuesta inmediata de una lectura FUSE bloqueada |
 | Contador recorrido en cero | Se persiste cada 100 archivos; contrastar crecimiento de fichas y proceso activo |

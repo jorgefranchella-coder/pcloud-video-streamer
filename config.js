@@ -40,6 +40,7 @@ function visualConfiguration() {
   return {
     visual_model: model,
     max_visual: integerSetting('MAX_VISUAL', 1, 1, 100),
+    max_visual_attempts: integerSetting('MAX_VISUAL_ATTEMPTS', 5, 1, 20),
     retry_visual_failed: booleanSetting('RETRY_VISUAL_FAILED'),
     visual_video_id: videoId
   };

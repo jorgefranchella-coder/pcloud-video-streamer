@@ -110,6 +110,11 @@ function renderProcessProgress(status) {
   const totalVisual = Object.values(visual).reduce((sum, value) => sum + count(value), 0);
   const technicalDone = count(technical.done);
   const visualDone = count(visual.done);
+  const retryWait = status.visual_retry_wait || {};
+  const retryEnabled = status.worker_configuration?.visual?.retry_failed;
+  const retryAt = retryWait.next_at ? new Date(`${retryWait.next_at.replace(' ', 'T')}Z`) : null;
+  const retryTime = retryAt && !Number.isNaN(retryAt.getTime())
+    ? retryAt.toLocaleString('es-AR', { dateStyle: 'short', timeStyle: 'short' }) : '';
   const setProgress = (bar, label, done, total) => {
     const percent = total ? Math.round((done / total) * 1000) / 10 : 0;
     bar.setAttribute('aria-valuenow', String(percent));
@@ -128,6 +133,9 @@ function renderProcessProgress(status) {
     `${format(visual.pending)} en cola`,
     `${format(visual.running)} en proceso`,
     `${format(visual.failed)} con error`,
+    count(retryWait.ready_count) && retryEnabled ? `${format(retryWait.ready_count)} listos para reintento` : '',
+    count(retryWait.ready_count) && !retryEnabled ? `${format(retryWait.ready_count)} reintentos vencidos · activá RETRY_VISUAL_FAILED` : '',
+    count(retryWait.count) > count(retryWait.ready_count) ? `${format(count(retryWait.count) - count(retryWait.ready_count))} esperando reintento${retryTime ? ` · próximo ${retryTime}` : ''}` : '',
     count(technical.pending) ? `${format(technical.pending)} esperando inventario técnico` : ''
   ].filter(Boolean).join(' · ');
 
@@ -143,7 +151,7 @@ function renderProcessProgress(status) {
   if (configured.visual) {
     const effective = configured.visual;
     const target = effective.video_id ? ` · video puntual ${effective.video_id}` : '';
-    settings.push(`Visual: ${effective.model}, lote ${format(effective.max_visual)}, reintentos ${effective.retry_failed ? 'activos' : 'desactivados'}${target}`);
+    settings.push(`Visual: ${effective.model}, lote ${format(effective.max_visual)}, máximo ${format(effective.max_visual_attempts)} intentos, reintentos ${effective.retry_failed ? 'activos' : 'desactivados'}${target}`);
   }
   effectiveConfiguration.textContent = settings.length
     ? `Configuración efectiva de la última ejecución: ${settings.join(' · ')}`

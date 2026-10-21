@@ -42,18 +42,18 @@ Las fechas candidatas proceden de etiquetas de captura de contenedor/streams, de
 
 ## Análisis visual
 
-1. Reclama el bloqueo exclusivo de la etapa visual, exige `OPENROUTER_API_KEY` y restablece registros visuales `running` a `pending`. Ese restablecimiento solo ocurre cuando la instancia anterior dejó de existir y se pudo adquirir el bloqueo.
-2. Selecciona videos con estado técnico `done`, por ID ascendente, hasta el límite del lote. `VISUAL_VIDEO_ID` sustituye esa selección por un video concreto y permite regenerarlo.
+1. Reclama el bloqueo exclusivo de la etapa visual, registra la configuración sin secretos y exige `OPENROUTER_API_KEY`. Si una instancia anterior dejó filas `running`, las convierte en fallidas con reintento diferido.
+2. Selecciona videos con estado técnico `done`, prioriza pendientes y después fallidos transitorios vencidos cuando `RETRY_VISUAL_FAILED=1`. `VISUAL_VIDEO_ID` selecciona un video concreto para regenerarlo.
 3. Comprueba ruta real, tamaño y mtime contra el fingerprint guardado.
 4. Extrae imágenes al 8 %, 35 %, 65 % y 92 % de la duración, redondeando a segundos y eliminando duplicados. Usa el segundo cero si no hay duración o es menor a dos segundos.
 5. Genera JPEG de hasta 768 × 768 conservando proporciones, con 45 segundos de timeout por extracción. Rechaza una imagen mayor de 700.000 bytes. Si falla algún fotograma puede continuar con los restantes; si fallan todos, falla el video.
 6. Envía las imágenes en memoria, codificadas en base64, y sus tiempos al endpoint `/chat/completions`. Solicita JSON Schema, soporte de parámetros y un máximo de 2.000 tokens de salida, con timeout de 120 segundos.
 7. Parsea JSON y valida tipos, tamaños de listas e índices de fotogramas. Convierte cada referencia en `at_seconds`. El prompt vigente es `visual-v2` y pide textos en español sin nombres inferidos.
-8. Revalida el archivo antes de guardar. Persiste ficha, modelo configurado, versión de prompt, uso reportado y fingerprint; reconstruye el texto de búsqueda y elimina las asociaciones previas por observación dentro de una transacción.
+8. Revalida el archivo antes de guardar. Persiste ficha, nueva revisión, modelo configurado, versión de prompt, uso reportado y fingerprint; reconstruye el texto de búsqueda. Las asociaciones anteriores quedan guardadas como pendientes de revisión y no se aplican a la revisión nueva.
 
-Los errores 401, 403, 429 y 5xx del proveedor detienen el lote después de marcar el video fallido. Otros errores individuales pueden registrarse y permitir que el lote termine con código cero. Por eso «servicio finalizado con éxito» no garantiza que todas sus fichas hayan tenido éxito.
+Los errores 401/403 detienen el lote y requieren corregir credenciales o permisos. Los 429 y 5xx detienen el lote y programan espera exponencial. Fallos transitorios individuales también reciben reintento diferido; errores 4xx y respuestas rechazadas no se reintentan automáticamente. El límite automático por fingerprint es configurable. Otros fallos individuales pueden registrarse y permitir que el lote termine con código cero. Por eso «servicio finalizado con éxito» no garantiza que todas sus fichas hayan tenido éxito.
 
-No hay caché persistente de fotogramas, historial de versiones, presupuesto diario, espera automática ante cuotas ni tabla de trabajos visuales. `visual_model` guarda el selector configurado; con un router no identifica necesariamente el modelo efectivo que atendió la solicitud.
+No hay caché persistente de fotogramas, historial completo de fichas visuales, presupuesto diario ni tabla general de trabajos. Sí se guardan los intentos y próximas fechas para cada video. `visual_model` guarda el selector configurado; con un router no identifica necesariamente el modelo efectivo que atendió la solicitud.
 
 ## SQLite
 
