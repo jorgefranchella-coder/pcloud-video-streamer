@@ -21,6 +21,24 @@ async function lockDownTree(root) {
   }
 }
 
+async function measureTree(root) {
+  let files = 0;
+  let bytes = 0;
+  async function visit(directory) {
+    for (const entry of await fs.promises.readdir(directory, { withFileTypes: true })) {
+      const child = path.join(directory, entry.name);
+      if (entry.isSymbolicLink()) throw new Error(`Symlinks are not allowed in evidence backup: ${child}`);
+      if (entry.isDirectory()) await visit(child);
+      else if (entry.isFile()) {
+        files += 1;
+        bytes += (await fs.promises.stat(child)).size;
+      } else throw new Error(`Unsupported evidence entry: ${child}`);
+    }
+  }
+  await visit(root);
+  return { files, bytes };
+}
+
 async function main() {
   if (!backupRootArg) throw new Error('Usage: node scripts/backup-data.js /absolute/private/backup-directory');
   const backupRoot = path.resolve(backupRootArg);
@@ -59,11 +77,13 @@ async function main() {
 
   const evidenceSource = path.join(DATA_DIR, 'evidence');
   let evidenceCopied = false;
+  let evidenceSummary = { files: 0, bytes: 0 };
   try {
     const stat = await fs.promises.lstat(evidenceSource);
     if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('DATA_DIR/evidence must be a real directory');
     await fs.promises.cp(evidenceSource, path.join(backupDir, 'evidence'), { recursive: true, errorOnExist: true, force: false });
     await lockDownTree(path.join(backupDir, 'evidence'));
+    evidenceSummary = await measureTree(path.join(backupDir, 'evidence'));
     evidenceCopied = true;
   } catch (error) {
     if (error.code !== 'ENOENT') throw error;
@@ -72,7 +92,9 @@ async function main() {
   const manifest = {
     created_at: new Date().toISOString(),
     sqlite_integrity_check: integrity,
-    evidence_copied: evidenceCopied
+    evidence_copied: evidenceCopied,
+    evidence_files: evidenceSummary.files,
+    evidence_bytes: evidenceSummary.bytes
   };
   const manifestPath = path.join(backupDir, 'manifest.json');
   await fs.promises.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600, flag: 'wx' });

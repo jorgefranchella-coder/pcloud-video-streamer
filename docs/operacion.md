@@ -118,14 +118,14 @@ pgrep -af 'node (indexer|visual-analyzer|server)\.js'
 DATA_DIR="$PWD/data" npm run backup -- /ruta/privada/pcloud-video-backups
 ```
 
-Si el timer visual no está instalado, quitarlo del comando. Si `pgrep` muestra procesos manuales, esperar a que terminen o detenerlos antes de copiar. Cada copia queda en un directorio fechado con `videos.sqlite`, `evidence/` si existe, `manifest.json` y un archivo `COMPLETE`. El programa falla si la base no pasa `integrity_check`. Replicar las copias a un destino independiente.
+Si el timer visual no está instalado, quitarlo del comando. Si `pgrep` muestra procesos manuales, esperar a que terminen o detenerlos antes de copiar. Cada copia queda en un directorio fechado con `videos.sqlite`, `evidence/` si existe, `manifest.json` y un archivo `COMPLETE`. El programa falla si la base no pasa `integrity_check`. Verificar la copia antes de replicarla a un destino independiente:
 
 ```bash
-sqlite3 /ruta/privada/pcloud-video-backups/pcloud-video-FECHA-PID/videos.sqlite 'PRAGMA integrity_check;'
+npm run verify-backup -- /ruta/privada/pcloud-video-backups/pcloud-video-FECHA-PID
 sudo systemctl start pcloud-video-streamer.service
 ```
 
-Resultado esperado: `ok`. Reactivar solo los timers que estaban activos antes del respaldo. Este procedimiento no sustituye una restauración de prueba; este documento todavía no ejecutó una.
+El verificador comprueba el marcador, integridad SQLite, claves foráneas, tablas requeridas y cantidad/tamaño total de evidencia frente al manifiesto. Reactivar solo los timers que estaban activos antes del respaldo. Este procedimiento no sustituye una restauración de prueba; este documento todavía no ejecutó una.
 
 ## Restauración
 
