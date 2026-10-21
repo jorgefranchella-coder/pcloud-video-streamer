@@ -501,7 +501,6 @@ function renderTree(items, container) {
   
   const ul = document.createElement('ul');
   ul.className = 'space-y-1';
-  ul.setAttribute('role', 'group');
   
   items.forEach(item => {
     const li = document.createElement('li');
