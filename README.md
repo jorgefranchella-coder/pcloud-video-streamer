@@ -59,6 +59,7 @@ Abrir `http://localhost:3001`. Guardar SQLite en disco local persistente, fuera 
 ```text
 server.js                        Servidor web, API, reproducción y autorización de edición
 metadata-store.js                SQLite, esquema, estados, búsquedas y personas
+config.js                        Validación de configuración de los trabajadores
 indexer.js                       Inventario y fichas técnicas
 visual-analyzer.js               Fotogramas, petición a OpenRouter y persistencia visual
 public/index.html                Interfaz y estilos
