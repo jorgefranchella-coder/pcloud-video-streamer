@@ -11,7 +11,7 @@ const metadata = require('./metadata-store');
 const app = express();
 app.disable('x-powered-by');
 const portRaw = process.env.PORT;
-const PORT = portRaw === undefined || portRaw === '' ? 3000 : Number(portRaw);
+const PORT = portRaw === undefined ? 3000 : /^\d+$/.test(portRaw) ? Number(portRaw) : NaN;
 if (!Number.isSafeInteger(PORT) || PORT < 1 || PORT > 65535) {
   throw new Error('PORT must be an integer between 1 and 65535');
 }
