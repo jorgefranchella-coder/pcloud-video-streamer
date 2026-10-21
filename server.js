@@ -236,6 +236,36 @@ app.get('/api/list', async (req, res) => {
   }
 });
 
+function parseByteRange(header, fileSize) {
+  if (!Number.isSafeInteger(fileSize) || fileSize <= 0) return null;
+  const match = /^bytes=(\d*)-(\d*)$/i.exec(String(header).trim());
+  if (!match || (!match[1] && !match[2])) return null;
+
+  if (!match[1]) {
+    const suffixLength = Number(match[2]);
+    if (!Number.isSafeInteger(suffixLength) || suffixLength <= 0) return null;
+    return { start: Math.max(fileSize - suffixLength, 0), end: fileSize - 1 };
+  }
+
+  const start = Number(match[1]);
+  const requestedEnd = match[2] ? Number(match[2]) : fileSize - 1;
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(requestedEnd) || start >= fileSize || start > requestedEnd) return null;
+  return { start, end: Math.min(requestedEnd, fileSize - 1) };
+}
+
+function pipeFileStream(fullPath, options, res) {
+  const stream = fs.createReadStream(fullPath, options);
+  stream.on('error', error => {
+    console.error('Stream read error:', error);
+    if (!res.headersSent) res.status(500).json({ error: 'Internal server error' });
+    else res.destroy();
+  });
+  res.on('close', () => {
+    if (!res.writableEnded) stream.destroy();
+  });
+  stream.pipe(res);
+}
+
 // GET /api/stream?path=relative/path - Stream video with Range Requests
 app.get('/api/stream', async (req, res) => {
   const relativePath = req.query.path;
@@ -258,28 +288,22 @@ app.get('/api/stream', async (req, res) => {
     const range = req.headers.range;
     
     if (!range) {
-      // No range header - serve whole file (or first chunk for large files)
+      // No range header: serve the complete file.
       const contentType = mime.lookup(fullPath) || 'application/octet-stream';
       res.setHeader('Content-Type', contentType);
       res.setHeader('Content-Length', fileSize);
       res.setHeader('Accept-Ranges', 'bytes');
       
-      const stream = fs.createReadStream(fullPath);
-      stream.pipe(res);
+      pipeFileStream(fullPath, {}, res);
       return;
     }
     
-    // Parse Range header: bytes=start-end
-    const parts = range.replace(/bytes=/, '').split('-');
-    const start = parseInt(parts[0], 10);
-    const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
-    
-    // Validate range
-    if (isNaN(start) || isNaN(end) || start >= fileSize || end >= fileSize || start > end) {
+    const parsedRange = parseByteRange(range, fileSize);
+    if (!parsedRange) {
       res.setHeader('Content-Range', `bytes */${fileSize}`);
       return res.status(416).json({ error: 'Range not satisfiable' });
     }
-    
+    const { start, end } = parsedRange;
     const chunkSize = end - start + 1;
     const contentType = mime.lookup(fullPath) || 'application/octet-stream';
     
@@ -289,8 +313,7 @@ app.get('/api/stream', async (req, res) => {
     res.setHeader('Content-Range', `bytes ${start}-${end}/${fileSize}`);
     res.setHeader('Accept-Ranges', 'bytes');
     
-    const stream = fs.createReadStream(fullPath, { start, end });
-    stream.pipe(res);
+    pipeFileStream(fullPath, { start, end }, res);
   } catch (err) {
     if (err.code === 'ENOENT') {
       return res.status(404).json({ error: 'File not found' });

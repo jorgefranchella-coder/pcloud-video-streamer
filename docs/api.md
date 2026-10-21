@@ -57,7 +57,7 @@ curl --get http://127.0.0.1:3001/api/stream \
 
 Con rango aceptado devuelve `206`, `Content-Range`, `Content-Length` y tipo MIME. Sin Range devuelve el archivo completo con `200`. Un rango rechazado devuelve `416` con `Content-Range: bytes */tamaño`. Ruta ausente: `400`; ruta fuera de raíz: `403`; archivo inexistente/no regular: `404`.
 
-La implementación maneja el formato simple `bytes=inicio-fin` o `bytes=inicio-`. No implementa adecuadamente todos los casos del protocolo, como rangos de sufijo o múltiples rangos. La ruta de streaming no restringe por extensión: puede entregar cualquier archivo regular accesible dentro de `VIDEO_ROOT`, aunque no aparezca en el listado.
+La implementación acepta un rango simple `bytes=inicio-fin`, `bytes=inicio-` o `bytes=-sufijo`; recorta un extremo final mayor que el tamaño del archivo. Los rangos múltiples no se sirven y reciben `416`. Si el cliente cierra la conexión, se destruye el stream de lectura. La ruta de streaming no restringe por extensión: puede entregar cualquier archivo regular accesible dentro de `VIDEO_ROOT`, aunque no aparezca en el listado.
 
 ## Ficha
 
