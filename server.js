@@ -20,8 +20,12 @@ const ROOT_RESOLVED = path.resolve(VIDEO_ROOT);
 const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(__dirname, 'data'));
 const execFileAsync = promisify(execFile);
 const ACCESS_TOKEN = process.env.ACCESS_TOKEN || '';
+const ACCESS_COOKIE_SECURE = process.env.ACCESS_COOKIE_SECURE || '0';
 const ACCESS_COOKIE = 'pcloud_video_session';
 const ACCESS_COOKIE_MAX_AGE = 12 * 60 * 60;
+if (!['0', '1'].includes(ACCESS_COOKIE_SECURE)) {
+  throw new Error('ACCESS_COOKIE_SECURE must be 0 or 1');
+}
 if (ACCESS_TOKEN && Buffer.byteLength(ACCESS_TOKEN) < 32) {
   throw new Error('ACCESS_TOKEN must contain at least 32 bytes');
 }
@@ -108,13 +112,13 @@ app.post('/api/access/session', (req, res) => {
   if (!ACCESS_TOKEN) return res.status(404).json({ error: 'Access authentication is not enabled' });
   const supplied = typeof req.body?.token === 'string' ? req.body.token : '';
   if (!constantTimeEqual(ACCESS_TOKEN, supplied)) return res.status(401).json({ error: 'Unauthorized' });
-  const secure = process.env.ACCESS_COOKIE_SECURE === '1' ? '; Secure' : '';
+  const secure = ACCESS_COOKIE_SECURE === '1' ? '; Secure' : '';
   res.setHeader('Set-Cookie', `${ACCESS_COOKIE}=${expectedSessionValue()}; Path=/; Max-Age=${ACCESS_COOKIE_MAX_AGE}; HttpOnly; SameSite=Strict${secure}`);
   res.json({ authenticated: true });
 });
 
 app.delete('/api/access/session', (_req, res) => {
-  const secure = process.env.ACCESS_COOKIE_SECURE === '1' ? '; Secure' : '';
+  const secure = ACCESS_COOKIE_SECURE === '1' ? '; Secure' : '';
   res.setHeader('Set-Cookie', `${ACCESS_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict${secure}`);
   res.status(204).end();
 });
