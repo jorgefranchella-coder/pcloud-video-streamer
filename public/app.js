@@ -75,8 +75,10 @@ const API_BASE = '';
 // Initialize
 document.addEventListener('DOMContentLoaded', async () => {
   if (!await establishAccessSession()) {
-    folderTree.textContent = 'Acceso requerido para consultar la biblioteca.';
-    mobileFolderTree.textContent = 'Acceso requerido para consultar la biblioteca.';
+    if (!folderTree.textContent) {
+      folderTree.textContent = 'Acceso requerido para consultar la biblioteca.';
+      mobileFolderTree.textContent = 'Acceso requerido para consultar la biblioteca.';
+    }
     progressUpdated.textContent = 'Sesión no iniciada';
     return;
   }
@@ -113,8 +115,11 @@ async function establishAccessSession() {
     }
     return true;
   } catch (error) {
-    folderTree.textContent = `No se pudo verificar el acceso (${error.message}).`;
-    mobileFolderTree.textContent = `No se pudo verificar el acceso (${error.message}).`;
+    const detail = error.message === 'HTTP 404'
+      ? 'El servidor no reconoce /api/access/status. Reiniciá pcloud-video-streamer.service y recargá la página.'
+      : `No se pudo verificar el acceso (${error.message}).`;
+    folderTree.textContent = detail;
+    mobileFolderTree.textContent = detail;
     return false;
   }
 }
