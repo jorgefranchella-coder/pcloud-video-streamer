@@ -65,6 +65,8 @@ async function main() {
   try {
     await fs.promises.copyFile(path.join(backupDir, 'videos.sqlite'), path.join(targetDir, 'videos.sqlite'), fs.constants.COPYFILE_EXCL);
     await fs.promises.chmod(path.join(targetDir, 'videos.sqlite'), 0o600);
+    await fs.promises.copyFile(path.join(backupDir, 'manifest.json'), path.join(targetDir, 'manifest.json'), fs.constants.COPYFILE_EXCL);
+    await fs.promises.copyFile(path.join(backupDir, 'COMPLETE'), path.join(targetDir, 'COMPLETE'), fs.constants.COPYFILE_EXCL);
 
     if (manifest.evidence_copied) {
       await fs.promises.cp(path.join(backupDir, 'evidence'), path.join(targetDir, 'evidence'), {
@@ -87,6 +89,9 @@ async function main() {
         throw new Error('Restored evidence does not match the verified backup manifest');
       }
     }
+    await execFileAsync(process.execPath, [path.join(__dirname, 'verify-backup.js'), targetDir]);
+    await fs.promises.unlink(path.join(targetDir, 'COMPLETE'));
+    await fs.promises.unlink(path.join(targetDir, 'manifest.json'));
     await fs.promises.writeFile(path.join(targetDir, 'RESTORE_COMPLETE'), 'ok\n', { mode: 0o600, flag: 'wx' });
     console.log(`Restore complete: ${targetDir}`);
   } catch (error) {
