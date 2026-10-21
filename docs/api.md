@@ -24,6 +24,7 @@ Errores comunes de edición: `503` si no se configuró el token, `401` si no coi
 | `GET /api/index/status` | Conteos, último recorrido y configuración efectiva no secreta registrada por cada trabajador |
 | `GET /api/search` | `q`, `from`, `to`, `person_id`, `folder`, `limit`, `offset` |
 | `GET /api/people` | Catálogo de nombres y cantidades |
+| `PATCH /api/people/:id` | `{ "name": "..." }`; renombra con `METADATA_EDIT_TOKEN` y actualiza la búsqueda |
 | `PUT /api/metadata/person` | Asociación de una observación con un nombre |
 | `PATCH /api/metadata/people` | Lista general de nombres de compatibilidad |
 
@@ -157,9 +158,12 @@ Respuesta `{ "items": [...], "limit": 50, "offset": 0 }`. Cada item incluye ID, 
 {
   "items": [
     { "id": 7, "name": "Jorge", "appearances": 2, "videos": 1 }
-  ]
+  ],
+  "can_edit_people": true
 }
 ```
+
+`PATCH /api/people/:id` requiere `Authorization: Bearer <METADATA_EDIT_TOKEN>` y recibe `{ "name": "Nombre actualizado" }`. Actualiza el nombre del catálogo y reconstruye el texto de búsqueda de los videos con asociaciones vigentes. Devuelve `409` si otro registro ya usa ese nombre y `404` si la persona no existe.
 
 `appearances` cuenta asociaciones activas de la revisión vigente, no personas detectadas de forma independiente. Dos observaciones del mismo individuo en un video cuentan como dos apariciones y un video. El catálogo puede incluir nombres sin asociaciones; los videos `missing` no suman al conteo.
 

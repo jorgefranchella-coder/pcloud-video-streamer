@@ -66,6 +66,7 @@ let playbackRequestId = 0;
 let selectedPersonId = null;
 let editToken = null;
 let knownPeople = [];
+let canEditPeopleDirectory = false;
 let searchTimer;
 let searchRequestId = 0;
 const SEARCH_PAGE_SIZE = 50;
@@ -709,7 +710,9 @@ async function openPeopleDirectory() {
   try {
     const response = await fetch(`${API_BASE}/api/people`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    knownPeople = (await response.json()).items || [];
+    const data = await response.json();
+    knownPeople = data.items || [];
+    canEditPeopleDirectory = Boolean(data.can_edit_people);
     renderPeopleDirectory();
     peopleDialog.showModal();
   } catch (error) {
@@ -727,8 +730,10 @@ function renderPeopleDirectory() {
     return;
   }
   for (const person of knownPeople) {
+    const row = document.createElement('div');
+    row.className = 'flex items-center gap-2 rounded-lg px-2 py-2 hover:bg-gray-700';
     const button = document.createElement('button');
-    button.className = 'flex w-full items-center justify-between gap-3 rounded-lg px-3 py-3 text-left hover:bg-gray-700';
+    button.className = 'flex min-w-0 flex-1 items-center justify-between gap-3 py-1 text-left';
     const name = document.createElement('span');
     name.className = 'font-medium';
     name.textContent = person.name;
@@ -747,7 +752,44 @@ function renderPeopleDirectory() {
       peopleDialog.close();
       updateSearch();
     });
-    peopleDirectory.appendChild(button);
+    row.appendChild(button);
+    if (canEditPeopleDirectory) {
+      const rename = document.createElement('button');
+      rename.type = 'button';
+      rename.className = 'shrink-0 rounded border border-gray-600 px-2 py-1 text-xs text-gray-300 hover:bg-gray-600 hover:text-white';
+      rename.textContent = 'Renombrar';
+      rename.setAttribute('aria-label', `Renombrar a ${person.name}`);
+      rename.addEventListener('click', () => renameDirectoryPerson(person));
+      row.appendChild(rename);
+    }
+    peopleDirectory.appendChild(row);
+  }
+}
+
+async function renameDirectoryPerson(person) {
+  const name = window.prompt(`Nuevo nombre para ${person.name}:`, person.name);
+  if (name == null || name.trim() === person.name) return;
+  const token = tokenForEditing();
+  if (!token) return;
+  try {
+    const response = await fetch(`${API_BASE}/api/people/${person.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ name: name.trim() })
+    });
+    if (response.status === 401) editToken = null;
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    knownPeople = result.items || knownPeople;
+    if (selectedPersonId === person.id) {
+      const canonicalName = knownPeople.find(item => item.id === person.id)?.name || name.trim();
+      searchInput.value = canonicalName;
+      mobileSearchInput.value = canonicalName;
+      updateSearch();
+    }
+    renderPeopleDirectory();
+  } catch (error) {
+    window.alert(`No se pudo renombrar la persona: ${error.message}`);
   }
 }
 

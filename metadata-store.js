@@ -521,6 +521,40 @@ function listPeople() {
     GROUP BY people.id ORDER BY people.name COLLATE NOCASE`).all();
 }
 
+function renamePerson(personId, newName) {
+  if (!Number.isSafeInteger(personId) || personId < 1 || typeof newName !== 'string') {
+    throw new Error('ID o nombre inválido');
+  }
+  const name = newName.trim().replace(/\s+/g, ' ');
+  if (!name || name.length > 80) throw new Error('El nombre debe tener entre 1 y 80 caracteres');
+  const rename = db.transaction(() => {
+    const existing = db.prepare('SELECT id, name FROM people WHERE id = ?').get(personId);
+    if (!existing) return null;
+    const duplicate = db.prepare('SELECT id FROM people WHERE name = ? COLLATE NOCASE AND id != ?').get(name, personId);
+    if (duplicate) throw new Error('Ya existe una persona con ese nombre');
+    db.prepare('UPDATE people SET name = ? WHERE id = ?').run(name, personId);
+    const affectedVideos = db.prepare(`SELECT videos.* FROM videos
+      WHERE videos.id IN (SELECT video_id FROM video_person_observations
+        WHERE person_id = ? AND analysis_revision = videos.visual_revision)
+      AND videos.visual_status = 'done'`).all(personId);
+    for (const row of affectedVideos) {
+      const assignedNames = db.prepare(`SELECT people.name FROM video_person_observations
+        JOIN people ON people.id = video_person_observations.person_id
+        WHERE video_id = ? AND analysis_revision = ?`).all(row.id, row.visual_revision).map(item => item.name);
+      const searchText = buildVisualSearchText({
+        events: JSON.parse(row.visual_events_json), people: JSON.parse(row.visual_people_json),
+        places: JSON.parse(row.visual_places_json), keywords: JSON.parse(row.visual_keywords_json),
+        dateClues: JSON.parse(row.visual_date_clues_json),
+        confirmedPeople: [...JSON.parse(row.confirmed_people_json), ...assignedNames]
+      });
+      db.prepare('UPDATE videos SET visual_search_text = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+        .run(searchText, row.id);
+    }
+    return db.prepare('SELECT id, name FROM people WHERE id = ?').get(personId);
+  });
+  return rename.immediate();
+}
+
 function identifiedPeopleForVideo(videoId) {
   return Object.fromEntries(db.prepare(`SELECT observation_index, people.id AS person_id, people.name
     FROM video_person_observations JOIN people ON people.id = video_person_observations.person_id
@@ -596,6 +630,6 @@ function setVideoPerson({ relativePath, observationIndex, personId, personName, 
 module.exports = {
   db, getByPath, getById, upsert, parseVideo, status, search, buildVisualSearchText,
   setConfirmedPeople, listPeople, identifiedPeopleForVideo, staleIdentificationsForVideo,
-  setVideoPerson, withJobLock, setWorkerConfiguration, setWorkerActivity, reserveVisualDailyRequest,
+  setVideoPerson, renamePerson, withJobLock, setWorkerConfiguration, setWorkerActivity, reserveVisualDailyRequest,
   getVisualProviderControl, setVisualProviderControl, clearVisualProviderControl
 };

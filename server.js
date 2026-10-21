@@ -145,7 +145,23 @@ app.get('/api/index/status', async (_req, res) => {
 });
 
 app.get('/api/people', (_req, res) => {
-  res.json({ items: metadata.listPeople() });
+  res.json({ items: metadata.listPeople(), can_edit_people: Boolean(process.env.METADATA_EDIT_TOKEN) });
+});
+
+app.patch('/api/people/:id', (req, res) => {
+  if (!authorizeMetadataEdit(req, res)) return;
+  const id = /^\d+$/.test(req.params.id) ? Number(req.params.id) : NaN;
+  const name = req.body?.name;
+  if (!Number.isSafeInteger(id) || id < 1 || typeof name !== 'string') {
+    return res.status(400).json({ error: 'Invalid person ID or name' });
+  }
+  try {
+    const person = metadata.renamePerson(id, name);
+    if (!person) return res.status(404).json({ error: 'Person not found' });
+    res.json({ person, items: metadata.listPeople() });
+  } catch (error) {
+    res.status(error.message.startsWith('Ya existe') ? 409 : 400).json({ error: error.message });
+  }
 });
 
 app.get('/api/search', (req, res) => {
