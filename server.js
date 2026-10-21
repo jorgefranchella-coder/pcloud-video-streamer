@@ -156,14 +156,23 @@ function authorizeMetadataEdit(req, res) {
 app.put('/api/metadata/person', (req, res) => {
   if (!authorizeMetadataEdit(req, res)) return;
   const { path: relativePath, observation_index: observationIndex, person_id: personId, person_name: personName } = req.body || {};
+  const stale = req.body?.stale_observation;
   if (typeof relativePath !== 'string' || !safeResolve(relativePath) ||
       !Number.isInteger(observationIndex) || observationIndex < 0 ||
       (personId != null && !Number.isInteger(personId)) ||
-      (personName != null && (typeof personName !== 'string' || personName.trim().length > 80))) {
+      (personName != null && (typeof personName !== 'string' || personName.trim().length > 80)) ||
+      (stale != null && (typeof stale.analysis_revision !== 'string' || stale.analysis_revision.length > 200 ||
+        !Number.isInteger(stale.observation_index) || stale.observation_index < 0))) {
     return res.status(400).json({ error: 'Invalid video, observation, or person' });
   }
   try {
-    const person = metadata.setVideoPerson({ relativePath, observationIndex, personId, personName });
+    const person = metadata.setVideoPerson({
+      relativePath, observationIndex, personId, personName,
+      staleObservation: stale ? {
+        analysisRevision: stale.analysis_revision,
+        observationIndex: stale.observation_index
+      } : undefined
+    });
     if (person === false) return res.status(404).json({ error: 'Video or observation not found' });
     res.json({ person, people: metadata.listPeople() });
   } catch (error) {

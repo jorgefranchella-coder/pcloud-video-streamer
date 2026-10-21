@@ -591,9 +591,9 @@ function tokenForEditing() {
 
 async function saveObservationIdentity(observationIndex, assignment) {
   const pathToEdit = selectedVideoPath;
-  if (!pathToEdit) return;
+  if (!pathToEdit) return false;
   const token = tokenForEditing();
-  if (!token) return;
+  if (!token) return false;
   try {
     const response = await fetch(`${API_BASE}/api/metadata/person`, {
       method: 'PUT',
@@ -605,8 +605,10 @@ async function saveObservationIdentity(observationIndex, assignment) {
     const result = await response.json();
     knownPeople = result.people || knownPeople;
     if (selectedVideoPath === pathToEdit) await loadMetadata(pathToEdit);
+    return true;
   } catch (error) {
     window.alert(`No se pudo guardar la identificación: ${error.message}`);
+    return false;
   }
 }
 
@@ -715,7 +717,14 @@ function renderIdentityAssignments(item) {
         apply.addEventListener('click', async () => {
           if (select.value === '') return;
           apply.disabled = true;
-          await saveObservationIdentity(Number(select.value), { person_id: previous.person_id });
+          const saved = await saveObservationIdentity(Number(select.value), {
+            person_id: previous.person_id,
+            stale_observation: {
+              analysis_revision: previous.analysis_revision,
+              observation_index: previous.observation_index
+            }
+          });
+          if (!saved) apply.disabled = false;
         });
         controls.append(select, apply);
         entry.appendChild(controls);

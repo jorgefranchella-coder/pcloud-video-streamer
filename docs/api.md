@@ -61,7 +61,7 @@ La implementación maneja el formato simple `bytes=inicio-fin` o `bytes=inicio-`
 
 ## Ficha
 
-`GET /api/metadata?path=...` devuelve la fila de `videos`, más las versiones parseadas de sus JSON, `identified_people`, `stale_identifications` y `can_edit_people`. Las identidades de una revisión anterior se conservan en `stale_identifications` para revisión manual; nunca se aplican automáticamente a la nueva lista. Un archivo puede existir en el montaje y devolver `404` aquí si todavía no está indexado. Ruta inválida: `400`.
+`GET /api/metadata?path=...` devuelve la fila de `videos`, más las versiones parseadas de sus JSON, `identified_people`, `stale_identifications` y `can_edit_people`. Las identidades de una revisión anterior aparecen en `stale_identifications` para revisión manual; nunca se aplican automáticamente a la nueva lista. Al reasignar una de ellas desde la interfaz, `PUT /api/metadata/person` envía además `stale_observation: { "analysis_revision": "...", "observation_index": 0 }`. El servidor verifica y marca como revisada esa asignación anterior en la misma transacción que guarda la nueva. El registro histórico se conserva, pero deja de aparecer como pendiente. Un archivo puede existir en el montaje y devolver `404` aquí si todavía no está indexado. Ruta inválida: `400`.
 
 Campos principales:
 

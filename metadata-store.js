@@ -218,6 +218,7 @@ const migrateObservations = db.transaction(() => {
     at_seconds REAL NOT NULL DEFAULT 0,
     person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
     confirmed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    reviewed_at TEXT,
     PRIMARY KEY (video_id, analysis_revision, observation_index)
   )`);
   if (legacy) {
@@ -230,6 +231,10 @@ const migrateObservations = db.transaction(() => {
       old.person_id, old.confirmed_at
       FROM video_person_observations_legacy old JOIN videos ON videos.id = old.video_id`);
     db.exec('DROP TABLE video_person_observations_legacy');
+  }
+  const currentColumns = new Set(db.prepare('PRAGMA table_info(video_person_observations)').all().map(column => column.name));
+  if (!currentColumns.has('reviewed_at')) {
+    db.exec('ALTER TABLE video_person_observations ADD COLUMN reviewed_at TEXT');
   }
   db.exec(`CREATE INDEX IF NOT EXISTS video_person_person_idx ON video_person_observations(person_id);
     CREATE INDEX IF NOT EXISTS video_person_video_revision_idx ON video_person_observations(video_id, analysis_revision)`);
@@ -405,14 +410,16 @@ function identifiedPeopleForVideo(videoId) {
 
 function staleIdentificationsForVideo(videoId) {
   return db.prepare(`SELECT video_person_observations.observation_description AS description,
-      video_person_observations.at_seconds, people.id AS person_id, people.name, video_person_observations.confirmed_at
+      video_person_observations.at_seconds, people.id AS person_id, people.name, video_person_observations.confirmed_at,
+      video_person_observations.analysis_revision, video_person_observations.observation_index
     FROM video_person_observations JOIN people ON people.id = video_person_observations.person_id
       JOIN videos ON videos.id = video_person_observations.video_id
     WHERE video_id = ? AND video_person_observations.analysis_revision != COALESCE(videos.visual_revision, '')
+      AND video_person_observations.reviewed_at IS NULL
     ORDER BY video_person_observations.confirmed_at DESC, video_person_observations.observation_index`).all(videoId);
 }
 
-function setVideoPerson({ relativePath, observationIndex, personId, personName }) {
+function setVideoPerson({ relativePath, observationIndex, personId, personName, staleObservation }) {
   const row = getByPath.get(relativePath);
   if (!row || !Number.isInteger(observationIndex) || observationIndex < 0) return false;
   const observations = JSON.parse(row.visual_people_json);
@@ -438,6 +445,15 @@ function setVideoPerson({ relativePath, observationIndex, personId, personName }
           person_id = excluded.person_id, confirmed_at = CURRENT_TIMESTAMP`)
         .run(row.id, row.visual_revision, observationIndex, observations[observationIndex].description,
           observations[observationIndex].at_seconds, personId);
+    }
+
+    if (staleObservation) {
+      if (personId == null) throw new Error('Reconciliar una observación anterior requiere una persona asignada');
+      const reviewed = db.prepare(`UPDATE video_person_observations SET reviewed_at = CURRENT_TIMESTAMP
+        WHERE video_id = ? AND analysis_revision = ? AND observation_index = ? AND person_id = ?
+          AND analysis_revision != ? AND reviewed_at IS NULL`)
+        .run(row.id, staleObservation.analysisRevision, staleObservation.observationIndex, personId, row.visual_revision);
+      if (reviewed.changes !== 1) throw new Error('La asignación anterior ya no está pendiente de revisión');
     }
 
     const assignedNames = db.prepare(`SELECT people.name FROM video_person_observations
