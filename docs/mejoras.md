@@ -36,7 +36,7 @@ Mantener SQLite y procesos separados en la primera evolución. Incorporar una ta
 
 Un coordinador toma trabajos de forma atómica y ejecuta inicialmente un análisis técnico y un visual como máximo por etapa, con límites configurables. Puede empezar estrictamente secuencial si la lectura simultánea afecta al streamer. El trabajador termina o renueva su lease; otro proceso solo recupera un trabajo tras vencimiento comprobado.
 
-Estados propuestos: `pending`, `running`, `done`, `retry_wait`, `failed` y `cancelled`. Añadir una pausa persistente, un máximo diario de solicitudes/imágenes y una política explícita cuando el proveedor no esté disponible. Los errores de autenticación deben suspender la etapa y pedir intervención; las cuotas deben diferir el trabajo, no consumir reintentos sin espera.
+Estados propuestos: `pending`, `running`, `done`, `retry_wait`, `failed` y `cancelled`. Ya existe un máximo diario configurable de solicitudes al proveedor, con contador persistente en SQLite. Queda añadir pausa persistente y una política explícita cuando el proveedor no esté disponible. Los errores de autenticación deben suspender la etapa y pedir intervención; las cuotas deben diferir el trabajo, no consumir reintentos sin espera.
 
 La interfaz mostraría «Procesando», «Esperando cuota», «Pausado» o «Sin trabajos», junto al archivo actual, último resultado y cantidades por etapa. Arrancar, pausar o reintentar desde la web requiere nuevos endpoints administrativos autenticados y registro de quién ejecutó la acción. No ejecutar comandos systemd arbitrarios a partir de entrada del navegador.
 

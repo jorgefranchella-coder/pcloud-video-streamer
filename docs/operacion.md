@@ -91,6 +91,7 @@ Esta ejecución no cambia el estado de la unidad systemd. El analizador visual t
 | Muchas fichas visuales pendientes | Solo son elegibles las técnicas `done`. No hay encadenamiento ni timer visual |
 | `401` / `403` del proveedor | Revisar credencial, acceso y configuración desde el archivo protegido; no compartir la clave |
 | `429` | El lote se detiene y la ficha recibe una espera exponencial (inicia en cinco minutos, máximo 24 horas). Consultar la cuota; el siguiente arranque solo la toma cuando vence el plazo y `RETRY_VISUAL_FAILED=1` |
+| Presupuesto diario visual agotado | Revisar `visual_daily_budget` en `/api/index/status`; las fichas restantes siguen pendientes. El contador usa UTC y se renueva a las 00:00 UTC; iniciar otro lote después de ese momento |
 | JSON inválido o esquema incompatible | Revisar `visual_error`; el proveedor debe aceptar imágenes y salida estructurada. Reintentar de forma acotada o revisar el modelo |
 | `ffprobe` o `ffmpeg` lento | Ver montaje, caché y archivo actual. Un timeout de proceso no garantiza respuesta inmediata de una lectura FUSE bloqueada |
 | Contador recorrido en cero | Se persiste cada 100 archivos; contrastar crecimiento de fichas y proceso activo |

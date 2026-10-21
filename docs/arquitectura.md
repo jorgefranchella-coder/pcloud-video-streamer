@@ -53,7 +53,7 @@ Las fechas candidatas proceden de etiquetas de captura de contenedor/streams, de
 
 Los errores 401/403 detienen el lote y requieren corregir credenciales o permisos. Los 429 y 5xx detienen el lote y programan espera exponencial. Fallos transitorios individuales también reciben reintento diferido; errores 4xx y respuestas rechazadas no se reintentan automáticamente. El límite automático por fingerprint es configurable. Otros fallos individuales pueden registrarse y permitir que el lote termine con código cero. Por eso «servicio finalizado con éxito» no garantiza que todas sus fichas hayan tenido éxito.
 
-No hay caché persistente de fotogramas, historial completo de fichas visuales, presupuesto diario ni tabla general de trabajos. Sí se guardan los intentos y próximas fechas para cada video. `visual_model` guarda el selector configurado; con un router no identifica necesariamente el modelo efectivo que atendió la solicitud.
+No hay caché persistente de fotogramas, historial de versiones completas de fichas visuales ni tabla general de trabajos. Sí se guardan los intentos y próximas fechas por video, un contador diario de solicitudes y un historial acotado de ejecuciones de trabajadores. `visual_model` guarda el selector configurado; con un router no identifica necesariamente el modelo efectivo que atendió la solicitud.
 
 ## SQLite
 
@@ -66,6 +66,7 @@ Archivo: `DATA_DIR/videos.sqlite`. Se habilitan WAL, claves foráneas y espera d
 | `process_locks` | Bloqueo de etapa con token, PID, host y adquisición |
 | `worker_runs` | Último estado de ejecución, heartbeat, archivo/fase actual y resultado/error |
 | `worker_run_history` | Historial acotado a 200 ejecuciones recientes por etapa |
+| `visual_daily_requests` | Solicitudes visuales iniciadas por día UTC |
 | `worker_configuration` | Configuración efectiva no secreta registrada por cada etapa |
 | `people` | ID, nombre único con colación SQLite `NOCASE`, creación |
 | `video_person_observations` | Clave `(video_id, analysis_revision, observation_index)`, descripción/segundo observados, persona, confirmación y fecha opcional de revisión; conserva identidades anteriores sin asignarlas a otra ficha |
@@ -83,7 +84,7 @@ Cada análisis visual recibe `visual_revision`; las asignaciones se ligan a esa 
 | Video visual | Nulo se interpreta como pendiente; `pending`, `running`, `done`, `failed` |
 | Recorrido | `running`, `done`, `failed`, `interrupted`; al tomar el bloqueo, el siguiente indexador marca como interrumpidos los recorridos que quedaron `running` |
 
-`process_locks` serializa instancias del indexador entre sí y del analizador entre sí. Usa PID y nombre de host para identificar al propietario y recuperar registros abandonados en el mismo servidor. `worker_runs` conserva heartbeat y actividad para el progreso visible; `stale` se infiere cuando el PID local desaparece. La recuperación automática presupone que los procesos usan la misma base SQLite local y el mismo host; no es un coordinador distribuido para bases compartidas entre servidores.
+`process_locks` serializa indexador y analizador visual con un bloqueo común, además del bloqueo propio de cada etapa. Usa PID y nombre de host para identificar al propietario y recuperar registros abandonados en el mismo servidor. `worker_runs` conserva la actividad actual; `worker_run_history` mantiene hasta 200 ejecuciones por etapa. `stale` se infiere cuando el PID local desaparece. La recuperación automática presupone que los procesos usan la misma base SQLite local y el mismo host; no es un coordinador distribuido para bases compartidas entre servidores.
 
 ## Búsqueda e interfaz
 
@@ -93,6 +94,6 @@ FTS5 usa tokenización Unicode con eliminación de diacríticos. Se extraen hast
 
 ## Límites de acceso y privacidad
 
-La validación de rutas usa resolución absoluta, límites relativos y comprobación del destino real cuando existe. La API de lectura y streaming no exige autenticación, escucha en `0.0.0.0` y permite CORS de forma general. Solo las mutaciones de nombres requieren bearer token con comparación de tiempo constante.
+La validación de rutas usa resolución absoluta, límites relativos y comprobación del destino real cuando existe. El servidor escucha en `0.0.0.0`. Si `ACCESS_TOKEN` se configura, la API y el streaming requieren una cookie de sesión HttpOnly; sin él, el acceso permanece abierto por compatibilidad. CORS admite same-origin y orígenes exactos configurados. Las mutaciones de nombres requieren además su bearer token con comparación de tiempo constante.
 
 El árbol y las rutas de navegación interpolan nombres en `innerHTML`; es un riesgo de inyección HTML que debe corregirse. SQLite, los registros y las fichas contienen información personal. Los fotogramas se envían a OpenRouter y al proveedor seleccionado por ese servicio; la política de retención depende del proveedor y no la controla este código. La autorización de envío de fotogramas ya forma parte del alcance del proyecto; el audio sigue fuera del procesamiento actual.
