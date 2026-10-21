@@ -305,6 +305,23 @@ app.put('/api/metadata/person', (req, res) => {
   }
 });
 
+app.post('/api/metadata/person/review-stale', (req, res) => {
+  if (!authorizeMetadataEdit(req, res)) return;
+  const { path: relativePath, analysis_revision: analysisRevision, observation_index: observationIndex } = req.body || {};
+  if (typeof relativePath !== 'string' || !safeResolve(relativePath) ||
+      typeof analysisRevision !== 'string' || !analysisRevision || analysisRevision.length > 200 ||
+      !Number.isInteger(observationIndex) || observationIndex < 0) {
+    return res.status(400).json({ error: 'Invalid video or stale observation' });
+  }
+  try {
+    const dismissed = metadata.dismissStaleIdentification({ relativePath, analysisRevision, observationIndex });
+    if (!dismissed) return res.status(404).json({ error: 'Pending stale identification not found' });
+    res.json({ dismissed: true });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
 app.patch('/api/metadata/people', (req, res) => {
   if (!authorizeMetadataEdit(req, res)) return;
   const relativePath = req.body?.path;

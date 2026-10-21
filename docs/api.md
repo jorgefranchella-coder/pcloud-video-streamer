@@ -28,6 +28,7 @@ Errores comunes de edición: `503` si no se configuró el token, `401` si no coi
 | `PATCH /api/people/:id/merge` | `{ "target_person_id": 7 }`; fusiona en el destino, con `METADATA_EDIT_TOKEN` |
 | `POST /api/people/merges/:id/undo` | Deshace una fusión activa; requiere `METADATA_EDIT_TOKEN` |
 | `PUT /api/metadata/person` | Asociación de una observación con un nombre |
+| `POST /api/metadata/person/review-stale` | Marca una identificación antigua revisada sin reasignarla; requiere `METADATA_EDIT_TOKEN` |
 | `PATCH /api/metadata/people` | Lista general de nombres de compatibilidad |
 
 No existen endpoints para iniciar, pausar o cancelar análisis, editar fechas ni regenerar fichas desde la web. El catálogo permite renombrar, fusionar y deshacer fusiones con `METADATA_EDIT_TOKEN`.
@@ -66,6 +67,8 @@ La implementación acepta un rango simple `bytes=inicio-fin`, `bytes=inicio-` o 
 ## Ficha
 
 `GET /api/metadata?path=...` devuelve la fila de `videos`, más las versiones parseadas de sus JSON, `identified_people`, `stale_identifications`, `identity_history` y `can_edit_people`. Las identidades de una revisión anterior aparecen en `stale_identifications` para revisión manual; nunca se aplican automáticamente a la nueva lista. Al reasignar una de ellas desde la interfaz, `PUT /api/metadata/person` envía además `stale_observation: { "analysis_revision": "...", "observation_index": 0 }`. El servidor verifica y marca como revisada esa asignación anterior en la misma transacción que guarda la nueva. El registro histórico se conserva, pero deja de aparecer como pendiente. `identity_history` lista hasta 100 cambios humanos, del más reciente al más antiguo, incluidos los nombres anterior y nuevo y las reconciliaciones entre revisiones. Un archivo puede existir en el montaje y devolver `404` aquí si todavía no está indexado. Ruta inválida: `400`.
+
+`POST /api/metadata/person/review-stale` recibe `{ "path": "...", "analysis_revision": "...", "observation_index": 0 }`. Cierra la revisión pendiente sin crear una asignación en la ficha actual y registra `dismissed` en `identity_history`. Requiere autorización de edición; devuelve `404` si la identificación ya no está pendiente.
 
 `visual_evidence` contiene los segundos de los fotogramas persistidos para respaldar personas, eventos o pistas de fecha. `GET /api/metadata/evidence?path=...&revision=...&at_seconds=...` devuelve un JPEG solo si la revisión sigue vigente y el segundo está registrado en esa ficha. La ruta requiere la misma sesión de acceso que la ficha; una revisión anterior o evidencia ausente devuelve `404`.
 

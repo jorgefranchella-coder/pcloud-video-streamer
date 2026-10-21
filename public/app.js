@@ -949,6 +949,34 @@ function renderIdentityAssignments(item) {
       const summary = document.createElement('p');
       summary.textContent = `${previous.name}: ${description} (${time})`;
       entry.appendChild(summary);
+      if (item.can_edit_people) {
+        const dismiss = document.createElement('button');
+        dismiss.type = 'button';
+        dismiss.className = 'mt-2 rounded border border-gray-600 px-3 py-2 text-xs text-gray-200 hover:bg-gray-700';
+        dismiss.textContent = 'Resolver sin reasignar';
+        dismiss.addEventListener('click', async () => {
+          if (!window.confirm(`Marcar la identificación anterior de ${previous.name} como revisada sin asignarla a una observación actual? Se conservará en el historial.`)) return;
+          const pathToReview = selectedVideoPath;
+          const token = tokenForEditing();
+          if (!token) return;
+          try {
+            const response = await fetch(`${API_BASE}/api/metadata/person/review-stale`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+              body: JSON.stringify({ path: pathToReview,
+                analysis_revision: previous.analysis_revision,
+                observation_index: previous.observation_index })
+            });
+            if (response.status === 401) editToken = null;
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+            if (selectedVideoPath === pathToReview) await loadMetadata(pathToReview);
+          } catch (error) {
+            window.alert(`No se pudo resolver la identificación anterior: ${error.message}`);
+          }
+        });
+        entry.appendChild(dismiss);
+      }
       if (observations.length && item.can_edit_people) {
         const controls = document.createElement('div');
         controls.className = 'mt-2 flex flex-col gap-2 sm:flex-row';
@@ -1007,7 +1035,8 @@ function renderIdentityAssignments(item) {
       const to = change.person_name || 'Sin identificar';
       const action = change.action === 'reconciled' ? 'Reconciliada'
         : change.action === 'assigned' ? 'Identificada'
-        : change.action === 'removed' ? 'Quitada' : 'Cambiada';
+        : change.action === 'removed' ? 'Quitada'
+        : change.action === 'dismissed' ? 'Resuelta sin reasignar' : 'Cambiada';
       const date = new Date(`${change.changed_at.replace(' ', 'T')}Z`);
       const when = Number.isNaN(date.getTime()) ? change.changed_at : date.toLocaleString();
       entry.textContent = `${when} · ${action}: ${from} → ${to} (observación ${change.observation_index + 1})`;

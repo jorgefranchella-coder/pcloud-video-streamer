@@ -270,7 +270,7 @@ db.exec(`
     previous_name TEXT,
     person_id INTEGER,
     person_name TEXT,
-    action TEXT NOT NULL CHECK (action IN ('assigned', 'changed', 'removed', 'reconciled')),
+    action TEXT NOT NULL,
     stale_revision TEXT,
     stale_observation_index INTEGER,
     changed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -285,6 +285,38 @@ db.exec(`
     PRIMARY KEY (merge_id, video_id, analysis_revision, observation_index)
   );
 `);
+
+const identityHistorySchema = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'video_person_identity_history'").get()?.sql || '';
+if (identityHistorySchema.includes('CHECK (action IN')) {
+  const migrateIdentityHistory = db.transaction(() => {
+    db.exec(`DROP INDEX IF EXISTS video_person_identity_history_video_idx;
+      ALTER TABLE video_person_identity_history RENAME TO video_person_identity_history_legacy;
+      CREATE TABLE video_person_identity_history (
+        id INTEGER PRIMARY KEY,
+        video_id INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+        analysis_revision TEXT NOT NULL,
+        observation_index INTEGER NOT NULL,
+        previous_person_id INTEGER,
+        previous_name TEXT,
+        person_id INTEGER,
+        person_name TEXT,
+        action TEXT NOT NULL,
+        stale_revision TEXT,
+        stale_observation_index INTEGER,
+        changed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+      INSERT INTO video_person_identity_history
+        (id, video_id, analysis_revision, observation_index, previous_person_id, previous_name,
+         person_id, person_name, action, stale_revision, stale_observation_index, changed_at)
+      SELECT id, video_id, analysis_revision, observation_index, previous_person_id, previous_name,
+        person_id, person_name, action, stale_revision, stale_observation_index, changed_at
+      FROM video_person_identity_history_legacy;
+      DROP TABLE video_person_identity_history_legacy;
+      CREATE INDEX video_person_identity_history_video_idx
+        ON video_person_identity_history(video_id, id DESC);`);
+  });
+  migrateIdentityHistory.immediate();
+}
 
 db.prepare(`UPDATE videos SET visual_revision = 'legacy:' || id || ':' || fingerprint
   WHERE visual_status = 'done' AND visual_revision IS NULL`).run();
@@ -712,6 +744,33 @@ function identityHistoryForVideo(videoId) {
     FROM video_person_identity_history WHERE video_id = ? ORDER BY id DESC LIMIT 100`).all(videoId);
 }
 
+function dismissStaleIdentification({ relativePath, analysisRevision, observationIndex }) {
+  const row = getByPath.get(relativePath);
+  if (!row || typeof analysisRevision !== 'string' || !analysisRevision ||
+      !Number.isInteger(observationIndex) || observationIndex < 0) return false;
+  const dismiss = db.transaction(() => {
+    const video = db.prepare('SELECT visual_revision FROM videos WHERE id = ?').get(row.id);
+    if (!video) return false;
+    const stale = db.prepare(`SELECT video_person_observations.person_id, people.name
+      FROM video_person_observations JOIN people ON people.id = video_person_observations.person_id
+      WHERE video_id = ? AND analysis_revision = ? AND observation_index = ?
+        AND analysis_revision != COALESCE(?, '') AND reviewed_at IS NULL`)
+      .get(row.id, analysisRevision, observationIndex, video.visual_revision);
+    if (!stale) return false;
+    const result = db.prepare(`UPDATE video_person_observations SET reviewed_at = CURRENT_TIMESTAMP
+      WHERE video_id = ? AND analysis_revision = ? AND observation_index = ? AND reviewed_at IS NULL`)
+      .run(row.id, analysisRevision, observationIndex);
+    if (result.changes !== 1) return false;
+    db.prepare(`INSERT INTO video_person_identity_history
+      (video_id, analysis_revision, observation_index, previous_person_id, previous_name,
+       person_id, person_name, action)
+      VALUES (?, ?, ?, ?, ?, NULL, NULL, 'dismissed')`)
+      .run(row.id, analysisRevision, observationIndex, stale.person_id, stale.name);
+    return true;
+  });
+  return dismiss.immediate();
+}
+
 function setVideoPerson({ relativePath, observationIndex, personId, personName, staleObservation }) {
   const row = getByPath.get(relativePath);
   if (!row || !Number.isInteger(observationIndex) || observationIndex < 0) return false;
@@ -785,6 +844,7 @@ function setVideoPerson({ relativePath, observationIndex, personId, personName, 
 module.exports = {
   db, getByPath, getById, upsert, parseVideo, status, search, buildVisualSearchText,
   setConfirmedPeople, listPeople, identifiedPeopleForVideo, staleIdentificationsForVideo, identityHistoryForVideo,
+  dismissStaleIdentification,
   setVideoPerson, renamePerson, mergePeople, undoPeopleMerge, listPersonMerges,
   withJobLock, setWorkerConfiguration, setWorkerActivity, reserveVisualDailyRequest,
   getVisualProviderControl, setVisualProviderControl, clearVisualProviderControl
