@@ -11,6 +11,7 @@ const videoPlayer = document.getElementById('videoPlayer');
 const videoTitle = document.getElementById('videoTitle');
 const videoInfo = document.getElementById('videoInfo');
 const emptyState = document.getElementById('emptyState');
+const emptyStateMessage = document.getElementById('emptyStateMessage');
 const loadingState = document.getElementById('loadingState');
 const currentPathDisplay = document.getElementById('currentPathDisplay');
 const breadcrumbList = document.getElementById('breadcrumbList');
@@ -440,12 +441,19 @@ function setupVideoEvents() {
   });
   
   videoPlayer.addEventListener('error', (e) => {
+    if (videoPlayer.error?.code === 1) return;
     loadingState.classList.add('hidden');
     emptyState.classList.remove('hidden');
     videoTitle.textContent = 'Error al cargar el vídeo';
     videoInfo.textContent = '';
     videoInfo.classList.add('hidden');
-    console.error('Video error:', e);
+    const messages = {
+      2: 'No se pudo leer el video. Revisá la conexión con pCloud y que el archivo siga disponible.',
+      3: 'El navegador no pudo decodificar este video. Puede estar dañado o usar un códec no compatible.',
+      4: 'El navegador no admite este formato o sus códecs. El servidor no convierte los videos.'
+    };
+    emptyStateMessage.textContent = messages[videoPlayer.error?.code] || 'No se pudo reproducir este video. Revisá el archivo, la conexión y los códecs admitidos por el navegador.';
+    console.error('Video error:', e, videoPlayer.error?.code);
   });
   
   videoPlayer.addEventListener('waiting', () => {
