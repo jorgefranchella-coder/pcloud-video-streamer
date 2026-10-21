@@ -204,6 +204,17 @@ function renderProcessProgress(status) {
       : 'cambiar clave, modelo o endpoint para reactivar';
     visualProgressDetail.textContent += ` · Proveedor pausado: ${providerControl.reason} · ${waitText}`;
   }
+  const visualTimer = status.visual_timer || {};
+  if (visualTimer.load_state === 'not-found') {
+    visualProgressDetail.textContent += ' · Continuación automática desactivada: timer visual no instalado';
+  } else if (visualTimer.active) {
+    const next = visualTimer.next_run ? ` · próximo lote ${visualTimer.next_run}` : '';
+    visualProgressDetail.textContent += ` · Timer visual activo${next}`;
+  } else if (visualTimer.available) {
+    visualProgressDetail.textContent += visualTimer.enabled
+      ? ' · Timer visual habilitado, esperando próximo disparo'
+      : ' · Timer visual instalado pero deshabilitado';
+  }
   const history = status.worker_history || {};
   const describeLastRun = run => {
     if (!run) return '';

@@ -4,6 +4,8 @@ const path = require('path');
 const cors = require('cors');
 const mime = require('mime-types');
 const crypto = require('crypto');
+const { execFile } = require('child_process');
+const { promisify } = require('util');
 const metadata = require('./metadata-store');
 
 const app = express();
@@ -11,6 +13,7 @@ const PORT = process.env.PORT || 3000;
 const VIDEO_ROOT = process.env.VIDEO_ROOT || '/mnt/pcloud/My Videos';
 const ROOT_RESOLVED = path.resolve(VIDEO_ROOT);
 const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(__dirname, 'data'));
+const execFileAsync = promisify(execFile);
 const ACCESS_TOKEN = process.env.ACCESS_TOKEN || '';
 const ACCESS_COOKIE = 'pcloud_video_session';
 const ACCESS_COOKIE_MAX_AGE = 12 * 60 * 60;
@@ -106,8 +109,39 @@ function safeResolve(requestedPath) {
   return resolved;
 }
 
-app.get('/api/index/status', (_req, res) => {
-  res.json(metadata.status());
+let visualTimerStatusCache = { checkedAt: 0, value: null };
+async function getVisualTimerStatus() {
+  if (visualTimerStatusCache.value && Date.now() - visualTimerStatusCache.checkedAt < 10000) {
+    return visualTimerStatusCache.value;
+  }
+  let value;
+  try {
+    const { stdout } = await execFileAsync('systemctl', [
+      'show', 'pcloud-video-visual.timer',
+      '--property=LoadState,ActiveState,UnitFileState,NextElapseUSecRealtime,LastTriggerUSec',
+      '--no-pager'
+    ], { timeout: 2000, maxBuffer: 10000 });
+    const fields = Object.fromEntries(stdout.trim().split('\n').map(line => {
+      const separator = line.indexOf('=');
+      return separator < 0 ? [line, ''] : [line.slice(0, separator), line.slice(separator + 1)];
+    }));
+    value = {
+      available: fields.LoadState === 'loaded',
+      load_state: fields.LoadState || 'unknown',
+      active: fields.ActiveState === 'active',
+      enabled: fields.UnitFileState === 'enabled',
+      next_run: fields.NextElapseUSecRealtime || null,
+      last_run: fields.LastTriggerUSec || null
+    };
+  } catch {
+    value = { available: false, load_state: 'unknown', active: false, enabled: false, next_run: null, last_run: null };
+  }
+  visualTimerStatusCache = { checkedAt: Date.now(), value };
+  return value;
+}
+
+app.get('/api/index/status', async (_req, res) => {
+  res.json({ ...metadata.status(), visual_timer: await getVisualTimerStatus() });
 });
 
 app.get('/api/people', (_req, res) => {

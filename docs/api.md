@@ -123,6 +123,8 @@ Ejemplo basado en la ejecución documentada, no respuesta fija. Las claves de es
 
 `visual_provider_control` indica si el analizador quedó pausado por fallo de configuración o está esperando cuota/red/proveedor. Los errores permanentes exigen cambiar clave, modelo o endpoint para despejar la pausa; las esperas temporales informan `paused_until`. No expone credenciales ni el fingerprint de configuración.
 
+`visual_timer` consulta el estado de solo lectura de `pcloud-video-visual.timer`: indica si la unidad existe, está activa/habilitada, el último disparo y la próxima ejecución. Si el host no usa systemd o no se puede consultar, `load_state` es `unknown`; la ruta no activa ni modifica unidades.
+
 `visual_retry_wait` informa cuántos fallos tienen reintento pendiente y el próximo horario. Los errores transitorios usan espera exponencial hasta 24 horas; `429` comienza en cinco minutos y otros transitorios en un minuto. Cada fingerprint admite hasta `MAX_VISUAL_ATTEMPTS` intentos automáticos (por defecto cinco). Los errores `401`, `403` y otros `4xx` no reciben reintento automático. `RETRY_VISUAL_FAILED=1` es necesario para tomar fallos ya vencidos en una ejecución posterior.
 
 ## Búsqueda
