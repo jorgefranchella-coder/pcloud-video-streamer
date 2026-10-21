@@ -146,7 +146,7 @@ systemctl list-timers pcloud-video-visual.timer
 
 El timer no se habilita en la instalación inicial. Cada ejecución respeta `MAX_VISUAL`, el límite diario, los reintentos y el bloqueo común. Si se alcanza el límite diario, las fichas siguen pendientes; systemd las intentará en su siguiente intervalo, una vez renovado el contador UTC.
 
-Cambiar código del servidor exige reiniciarlo. Los procesos de lote cargan el nuevo código en su próximo arranque. Los archivos estáticos se leen en las peticiones; recargar el navegador. Para cambios de unidades: copiar nuevamente, `daemon-reload` y reiniciar la unidad afectada. Cambiar solo el contenido de un `EnvironmentFile` requiere un nuevo arranque del proceso que lo consume.
+Cambiar código del servidor exige reiniciarlo. Ante `SIGTERM` o `SIGINT`, el servidor deja de aceptar conexiones, permite hasta 25 segundos para terminar las solicitudes activas y luego cierra las conexiones restantes; finalmente cierra SQLite. Los procesos de lote cargan el nuevo código en su próximo arranque. Los archivos estáticos se leen en las peticiones; recargar el navegador. Para cambios de unidades: copiar nuevamente, `daemon-reload` y reiniciar la unidad afectada. Cambiar solo el contenido de un `EnvironmentFile` requiere un nuevo arranque del proceso que lo consume.
 
 ## Docker
 

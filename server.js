@@ -556,7 +556,34 @@ function isVideoFile(filename) {
   return videoExtensions.includes(ext);
 }
 
-app.listen(PORT, '0.0.0.0', () => {
+const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`Video root: ${VIDEO_ROOT}`);
 });
+
+let shuttingDown = false;
+function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`Received ${signal}; stopping HTTP server gracefully`);
+  const forceCloseTimer = setTimeout(() => {
+    console.warn('Graceful shutdown timed out; closing remaining HTTP connections');
+    server.closeAllConnections();
+  }, 25000);
+  forceCloseTimer.unref();
+  server.close(error => {
+    clearTimeout(forceCloseTimer);
+    if (error) {
+      console.error('HTTP server shutdown failed:', error);
+      process.exitCode = 1;
+    }
+    try { metadata.db.close(); }
+    catch (closeError) {
+      console.error('Database shutdown failed:', closeError);
+      process.exitCode = 1;
+    }
+  });
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
