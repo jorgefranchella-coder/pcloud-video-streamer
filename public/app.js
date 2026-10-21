@@ -1105,6 +1105,14 @@ function renderIdentityAssignments(item) {
       summary.textContent = `${previous.name}: ${description} (${time})`;
       entry.appendChild(summary);
       appendStaleEvidenceThumbnail(entry, item, previous);
+      if (previous.suggested_matches?.length) {
+        const match = previous.suggested_matches[0];
+        const suggestion = document.createElement('p');
+        suggestion.className = 'mt-2 text-xs text-sky-200';
+        const matchTime = `${Math.floor(match.at_seconds / 60)}:${String(Math.floor(match.at_seconds % 60)).padStart(2, '0')}`;
+        suggestion.textContent = `Posible coincidencia orientativa (${match.score}/100, no es una probabilidad): ${match.description} (${matchTime}). Revisá la evidencia antes de confirmar.`;
+        entry.appendChild(suggestion);
+      }
       if (item.can_edit_people) {
         const dismiss = document.createElement('button');
         dismiss.type = 'button';
@@ -1159,6 +1167,9 @@ function renderIdentityAssignments(item) {
           option.textContent = `${observation.description} (${Math.floor(observation.at_seconds / 60)}:${String(Math.floor(observation.at_seconds % 60)).padStart(2, '0')})`;
           select.appendChild(option);
         });
+        if (previous.suggested_matches?.length) {
+          select.value = String(previous.suggested_matches[0].observation_index);
+        }
         const apply = document.createElement('button');
         apply.type = 'button';
         apply.className = 'rounded bg-amber-700 px-3 py-2 text-sm hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-50';
@@ -1167,6 +1178,7 @@ function renderIdentityAssignments(item) {
         const updateApplyState = () => { apply.disabled = select.value === '' || identitySelect.value === ''; };
         select.addEventListener('change', updateApplyState);
         identitySelect.addEventListener('change', updateApplyState);
+        updateApplyState();
         apply.addEventListener('click', async () => {
           if (select.value === '') return;
           apply.disabled = true;

@@ -838,7 +838,33 @@ function identifiedPeopleForVideo(videoId) {
     .all(videoId).map(row => [row.observation_index, { id: row.person_id, name: row.name }]));
 }
 
+function identityTokens(value) {
+  const ignored = new Set(['con', 'del', 'una', 'uno', 'los', 'las', 'que', 'por', 'para', 'persona', 'grupo', 'alguien']);
+  return new Set(String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase()
+    .match(/[\p{L}\p{N}]+/gu)?.filter(token => token.length > 2 && !ignored.has(token)) || []);
+}
+
+function suggestObservationMatches(previous, currentObservations) {
+  const previousTokens = identityTokens(previous.description);
+  if (!previousTokens.size) return [];
+  return currentObservations.map((observation, observationIndex) => {
+    const currentTokens = identityTokens(observation.description);
+    const intersection = [...previousTokens].filter(token => currentTokens.has(token)).length;
+    const union = new Set([...previousTokens, ...currentTokens]).size;
+    const textSimilarity = union ? intersection / union : 0;
+    const timeSimilarity = Math.max(0, 1 - Math.abs(Number(previous.at_seconds) - Number(observation.at_seconds)) / 30);
+    const score = Math.round((textSimilarity * 0.75 + timeSimilarity * 0.25) * 100);
+    return { observation_index: observationIndex, description: observation.description,
+      at_seconds: observation.at_seconds, score, text_similarity: Number(textSimilarity.toFixed(3)) };
+  }).filter(item => item.text_similarity >= 0.2)
+    .sort((a, b) => b.score - a.score || a.observation_index - b.observation_index).slice(0, 3);
+}
+
 function staleIdentificationsForVideo(videoId) {
+  const video = getById.get(videoId);
+  if (!video) return [];
+  let currentObservations = [];
+  try { currentObservations = JSON.parse(video.visual_people_json || '[]'); } catch {}
   return db.prepare(`SELECT video_person_observations.observation_description AS description,
       video_person_observations.at_seconds, people.id AS person_id, people.name, video_person_observations.confirmed_at,
       video_person_observations.analysis_revision, video_person_observations.observation_index
@@ -846,7 +872,8 @@ function staleIdentificationsForVideo(videoId) {
       JOIN videos ON videos.id = video_person_observations.video_id
     WHERE video_id = ? AND video_person_observations.analysis_revision != COALESCE(videos.visual_revision, '')
       AND video_person_observations.reviewed_at IS NULL
-    ORDER BY video_person_observations.confirmed_at DESC, video_person_observations.observation_index`).all(videoId);
+    ORDER BY video_person_observations.confirmed_at DESC, video_person_observations.observation_index`).all(videoId)
+    .map(previous => ({ ...previous, suggested_matches: suggestObservationMatches(previous, currentObservations) }));
 }
 
 function identityHistoryForVideo(videoId) {
