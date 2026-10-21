@@ -389,9 +389,11 @@ function renderSearchResults(items, container, query, offset, requestId, folder)
     name.textContent = item.visual_title || item.relative_path.split('/').pop();
     const detail = document.createElement('span');
     detail.className = 'block truncate text-xs text-gray-400';
-    detail.textContent = `${item.recorded_at || 'Sin fecha'} · ${item.relative_path}${item.snippet ? ` · Coincidencia: ${item.snippet}` : item.visual_summary ? ` · ${item.visual_summary}` : ''}`;
+    const matchTime = Number.isFinite(item.match_at_seconds)
+      ? ` · Momento: ${Math.floor(item.match_at_seconds / 60)}:${String(Math.floor(item.match_at_seconds % 60)).padStart(2, '0')}` : '';
+    detail.textContent = `${item.recorded_at || 'Sin fecha'} · ${item.relative_path}${matchTime}${item.snippet ? ` · Coincidencia: ${item.snippet}` : item.visual_summary ? ` · ${item.visual_summary}` : ''}`;
     button.append(name, detail);
-    button.addEventListener('click', () => playVideo(item.relative_path, name.textContent));
+    button.addEventListener('click', () => playVideo(item.relative_path, name.textContent, item.match_at_seconds));
     li.appendChild(button);
     list.appendChild(li);
   }
@@ -567,7 +569,7 @@ function renderBreadcrumbs(path) {
   });
 }
 
-function playVideo(relativePath, name) {
+function playVideo(relativePath, name, seekToSeconds = null) {
   selectedVideoPath = relativePath;
   // Update UI
   videoTitle.textContent = name;
@@ -578,6 +580,11 @@ function playVideo(relativePath, name) {
   
   // Set video source
   const streamUrl = `${API_BASE}/api/stream?path=${encodeURIComponent(relativePath)}`;
+  if (Number.isFinite(seekToSeconds) && seekToSeconds >= 0) {
+    videoPlayer.addEventListener('loadedmetadata', () => {
+      if (selectedVideoPath === relativePath) videoPlayer.currentTime = seekToSeconds;
+    }, { once: true });
+  }
   videoPlayer.src = streamUrl;
   videoPlayer.load();
   videoPlayer.play().catch(err => {

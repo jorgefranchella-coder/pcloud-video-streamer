@@ -441,8 +441,8 @@ function search({ query, from, to, personId, folder, limit, offset }) {
   const matching = match ? 'video_fts MATCH ? AND ' : '';
   const snippet = match ? "snippet(video_fts, 3, '⟦', '⟧', '…', 18) AS snippet" : 'NULL AS snippet';
   const args = match ? [match] : [];
-  return db.prepare(`SELECT videos.id, videos.relative_path, videos.recorded_at, videos.date_source,
-      videos.status, videos.visual_title, videos.visual_summary, ${snippet}
+  const rows = db.prepare(`SELECT videos.id, videos.relative_path, videos.recorded_at, videos.date_source,
+      videos.status, videos.visual_title, videos.visual_summary, videos.visual_events_json, ${snippet}
     FROM ${source}
     WHERE ${matching}(? IS NULL OR videos.recorded_at >= ?)
       AND (? IS NULL OR videos.recorded_at <= ?)
@@ -455,6 +455,25 @@ function search({ query, from, to, personId, folder, limit, offset }) {
     ORDER BY videos.recorded_at IS NULL, videos.recorded_at DESC, videos.relative_path
     LIMIT ? OFFSET ?`).all(...args, from, from, to, to, personId ?? null, personId ?? null,
       folder ?? null, folder ?? null, folder ?? null, folder ?? null, limit, offset);
+  const normalizedWords = words.map(word => word.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase());
+  return rows.map(row => {
+    let matchAtSeconds = null;
+    if (normalizedWords.length) {
+      try {
+        const events = JSON.parse(row.visual_events_json);
+        const scored = events.map(event => {
+          const description = String(event.description || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase();
+          const score = normalizedWords.filter(word => description.includes(word)).length;
+          return { score, at_seconds: event.at_seconds };
+        }).filter(event => event.score > 0 && Number.isFinite(event.at_seconds));
+        scored.sort((a, b) => b.score - a.score || a.at_seconds - b.at_seconds);
+        if (scored.length) matchAtSeconds = scored[0].at_seconds;
+      } catch {}
+    }
+    delete row.visual_events_json;
+    row.match_at_seconds = matchAtSeconds;
+    return row;
+  });
 }
 
 function buildVisualSearchText({ events, people, places, keywords, dateClues, confirmedPeople }) {
