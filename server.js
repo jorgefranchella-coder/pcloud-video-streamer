@@ -3,23 +3,114 @@ const fs = require('fs');
 const path = require('path');
 const cors = require('cors');
 const mime = require('mime-types');
+const crypto = require('crypto');
+const metadata = require('./metadata-store');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const VIDEO_ROOT = process.env.VIDEO_ROOT || '/mnt/pcloud/My Videos';
+const ROOT_RESOLVED = path.resolve(VIDEO_ROOT);
 
 app.use(cors());
+app.use(express.json({ limit: '4kb' }));
 app.use(express.static('public'));
 
 // Helper: safely resolve path within VIDEO_ROOT
 function safeResolve(requestedPath) {
-  const resolved = path.resolve(VIDEO_ROOT, requestedPath);
-  const rootResolved = path.resolve(VIDEO_ROOT);
-  if (!resolved.startsWith(rootResolved)) {
-    return null;
+  if (typeof requestedPath !== 'string' || path.isAbsolute(requestedPath)) return null;
+  const resolved = path.resolve(ROOT_RESOLVED, requestedPath);
+  const relative = path.relative(ROOT_RESOLVED, resolved);
+  if (relative === '..' || relative.startsWith(`..${path.sep}`)) return null;
+  try {
+    const realRoot = fs.realpathSync(ROOT_RESOLVED);
+    const realPath = fs.realpathSync(resolved);
+    const realRelative = path.relative(realRoot, realPath);
+    if (realRelative === '..' || realRelative.startsWith(`..${path.sep}`)) return null;
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
   }
   return resolved;
 }
+
+app.get('/api/index/status', (_req, res) => {
+  res.json(metadata.status());
+});
+
+app.get('/api/people', (_req, res) => {
+  res.json({ items: metadata.listPeople() });
+});
+
+app.get('/api/search', (req, res) => {
+  const query = String(req.query.q || '').trim().slice(0, 100);
+  const from = typeof req.query.from === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.query.from) ? req.query.from : null;
+  const to = typeof req.query.to === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.query.to) ? req.query.to : null;
+  const limit = Math.min(Math.max(Number.parseInt(req.query.limit, 10) || 50, 1), 100);
+  const offset = Math.max(Number.parseInt(req.query.offset, 10) || 0, 0);
+  res.json({ items: metadata.search({ query, from, to, limit, offset }), limit, offset });
+});
+
+app.get('/api/metadata', (req, res) => {
+  const relativePath = req.query.path;
+  if (!relativePath || !safeResolve(relativePath)) {
+    return res.status(400).json({ error: 'Invalid path' });
+  }
+  const row = metadata.getByPath.get(relativePath);
+  if (!row) return res.status(404).json({ error: 'Video not indexed' });
+  res.json({
+    ...metadata.parseVideo(row),
+    identified_people: metadata.identifiedPeopleForVideo(row.id),
+    can_edit_people: Boolean(process.env.METADATA_EDIT_TOKEN)
+  });
+});
+
+function authorizeMetadataEdit(req, res) {
+  const expected = process.env.METADATA_EDIT_TOKEN;
+  if (!expected) {
+    res.status(503).json({ error: 'Editing is not configured' });
+    return false;
+  }
+  const supplied = String(req.headers.authorization || '').replace(/^Bearer /, '');
+  const expectedBytes = Buffer.from(expected);
+  const suppliedBytes = Buffer.from(supplied);
+  if (expectedBytes.length !== suppliedBytes.length || !crypto.timingSafeEqual(expectedBytes, suppliedBytes)) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return false;
+  }
+  return true;
+}
+
+app.put('/api/metadata/person', (req, res) => {
+  if (!authorizeMetadataEdit(req, res)) return;
+  const { path: relativePath, observation_index: observationIndex, person_id: personId, person_name: personName } = req.body || {};
+  if (typeof relativePath !== 'string' || !safeResolve(relativePath) ||
+      !Number.isInteger(observationIndex) || observationIndex < 0 ||
+      (personId != null && !Number.isInteger(personId)) ||
+      (personName != null && (typeof personName !== 'string' || personName.trim().length > 80))) {
+    return res.status(400).json({ error: 'Invalid video, observation, or person' });
+  }
+  try {
+    const person = metadata.setVideoPerson({ relativePath, observationIndex, personId, personName });
+    if (person === false) return res.status(404).json({ error: 'Video or observation not found' });
+    res.json({ person, people: metadata.listPeople() });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.patch('/api/metadata/people', (req, res) => {
+  if (!authorizeMetadataEdit(req, res)) return;
+  const relativePath = req.body?.path;
+  const names = req.body?.names;
+  if (!relativePath || !safeResolve(relativePath) || !Array.isArray(names) || names.length > 20 ||
+      names.some(name => typeof name !== 'string' || name.trim().length < 1 || name.trim().length > 80)) {
+    return res.status(400).json({ error: 'Invalid path or names' });
+  }
+  const uniqueNames = [...new Set(names.map(name => name.trim()))];
+  if (!metadata.setConfirmedPeople(relativePath, uniqueNames)) {
+    return res.status(404).json({ error: 'Video not indexed' });
+  }
+  res.json({ names: uniqueNames });
+});
 
 // GET /api/list?path=relative/path - List directory contents
 app.get('/api/list', async (req, res) => {
