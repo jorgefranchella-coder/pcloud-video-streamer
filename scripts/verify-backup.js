@@ -54,6 +54,9 @@ async function main() {
     for (const table of ['videos', 'people', 'video_person_observations']) {
       if (!tables.has(table)) throw new Error(`Required table missing: ${table}`);
     }
+    if (tables.has('process_locks') && db.prepare('SELECT COUNT(*) AS count FROM process_locks').get().count !== 0) {
+      throw new Error('Backup contains process locks; workers must be stopped before backup');
+    }
     videoCount = db.prepare('SELECT COUNT(*) AS count FROM videos').get().count;
   } finally {
     db.close();

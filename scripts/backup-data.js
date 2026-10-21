@@ -1,9 +1,11 @@
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const Database = require('better-sqlite3');
 
 const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(__dirname, '..', 'data'));
 const backupRootArg = process.argv[2];
+let incompleteBackupDir = null;
 
 function isWithin(parent, candidate) {
   const relative = path.relative(parent, candidate);
@@ -65,13 +67,41 @@ async function main() {
   const timestamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
   const backupDir = path.join(destinationRoot, `pcloud-video-${timestamp}-${process.pid}`);
   await fs.promises.mkdir(backupDir, { mode: 0o700 });
+  incompleteBackupDir = backupDir;
 
   const databaseBackupPath = path.join(backupDir, 'videos.sqlite.partial');
   const source = new Database(databasePath, { readonly: true, fileMustExist: true });
   try {
+    const hasLockTable = source.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'process_locks'").get();
+    if (hasLockTable) {
+      const locks = source.prepare('SELECT name, owner_pid, owner_host FROM process_locks').all();
+      for (const lock of locks) {
+        let processIsAlive = true;
+        if (lock.owner_host === os.hostname()) {
+          try { process.kill(lock.owner_pid, 0); }
+          catch (error) { processIsAlive = error.code !== 'ESRCH'; }
+        }
+        if (processIsAlive) {
+          throw new Error(`Cannot back up while ${lock.name} is locked by ${lock.owner_host} (pid ${lock.owner_pid})`);
+        }
+      }
+    }
     await source.backup(databaseBackupPath);
   } finally {
     source.close();
+  }
+
+  const backupMutableDb = new Database(databaseBackupPath);
+  let staleLocksRemoved = 0;
+  try {
+    const hasLockTable = backupMutableDb.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'process_locks'").get();
+    if (hasLockTable) staleLocksRemoved = backupMutableDb.prepare('DELETE FROM process_locks').run().changes;
+    backupMutableDb.pragma('wal_checkpoint(TRUNCATE)');
+    if (backupMutableDb.pragma('journal_mode = DELETE', { simple: true }) !== 'delete') {
+      throw new Error('Could not finalize the backup as a standalone SQLite database');
+    }
+  } finally {
+    backupMutableDb.close();
   }
 
   const backupDb = new Database(databaseBackupPath, { readonly: true, fileMustExist: true });
@@ -102,6 +132,7 @@ async function main() {
   const manifest = {
     created_at: new Date().toISOString(),
     sqlite_integrity_check: integrity,
+    stale_locks_removed: staleLocksRemoved,
     evidence_copied: evidenceCopied,
     evidence_files: evidenceSummary.files,
     evidence_bytes: evidenceSummary.bytes
@@ -109,10 +140,12 @@ async function main() {
   const manifestPath = path.join(backupDir, 'manifest.json');
   await fs.promises.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
   await fs.promises.writeFile(path.join(backupDir, 'COMPLETE'), 'ok\n', { mode: 0o600, flag: 'wx' });
+  incompleteBackupDir = null;
   console.log(`Backup complete: ${backupDir}`);
 }
 
 main().catch(error => {
+  if (incompleteBackupDir) fs.promises.rm(incompleteBackupDir, { recursive: true, force: true }).catch(() => {});
   console.error(`Backup failed: ${error.message}`);
   process.exitCode = 1;
 });
