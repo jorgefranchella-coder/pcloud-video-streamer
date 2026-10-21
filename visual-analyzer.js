@@ -151,6 +151,28 @@ async function removeOldEvidence(videoId, keepRevisions) {
   }
 }
 
+async function readLimitedResponse(response, maxBytes) {
+  const reader = response.body?.getReader();
+  if (!reader) return '';
+  const chunks = [];
+  let totalBytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > maxBytes) {
+        await reader.cancel();
+        throw new Error('Provider response exceeds the allowed size');
+      }
+      chunks.push(Buffer.from(value));
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks, totalBytes).toString('utf8');
+}
+
 async function describeFrames(frames, apiKey) {
   const content = [{ type: 'text', text: 'Estas son imágenes puntuales del mismo video, en orden temporal. Usa el índice de cada fotograma para respaldar eventos, personas y pistas de fecha.' }];
   for (const [index, frame] of frames.entries()) {
@@ -195,10 +217,13 @@ async function describeFrames(frames, apiKey) {
     throw networkError;
   }
   if (!response.ok) {
-    const body = await response.text();
+    const body = await readLimitedResponse(response, 16 * 1024);
     throw new Error(`OpenRouter HTTP ${response.status}: ${body.slice(0, 300)}`);
   }
-  const data = await response.json();
+  const responseText = await readLimitedResponse(response, 1024 * 1024);
+  let data;
+  try { data = JSON.parse(responseText); }
+  catch { throw new Error('OpenRouter returned invalid JSON'); }
   const message = data.choices?.[0]?.message;
   if (message?.refusal) throw new Error(`OpenRouter refusal: ${String(message.refusal).slice(0, 300)}`);
   const outputText = typeof message?.content === 'string'
