@@ -236,8 +236,18 @@ app.get('/api/search', (req, res) => {
   if (folder !== null && (typeof folder !== 'string' || folder.length > 1000 || !safeResolve(folder))) {
     return res.status(400).json({ error: 'Invalid folder' });
   }
-  const limit = Math.min(Math.max(Number.parseInt(req.query.limit, 10) || 50, 1), 100);
-  const offset = Math.max(Number.parseInt(req.query.offset, 10) || 0, 0);
+  const limitRaw = req.query.limit;
+  const offsetRaw = req.query.offset;
+  const limit = limitRaw === undefined ? 50
+    : typeof limitRaw === 'string' && /^\d+$/.test(limitRaw) ? Number(limitRaw) : NaN;
+  const offset = offsetRaw === undefined ? 0
+    : typeof offsetRaw === 'string' && /^\d+$/.test(offsetRaw) ? Number(offsetRaw) : NaN;
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+    return res.status(400).json({ error: 'limit must be an integer between 1 and 100' });
+  }
+  if (!Number.isSafeInteger(offset) || offset < 0 || offset > 1000000) {
+    return res.status(400).json({ error: 'offset must be an integer between 0 and 1000000' });
+  }
   res.json({ items: metadata.search({ query, from, to, personId, folder, limit, offset }), limit, offset });
 });
 
