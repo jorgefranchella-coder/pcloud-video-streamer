@@ -20,8 +20,8 @@ const ROOT_RESOLVED = path.resolve(VIDEO_ROOT);
 const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(__dirname, 'data'));
 const execFileAsync = promisify(execFile);
 const ACCESS_TOKEN = process.env.ACCESS_TOKEN || '';
-const ACCESS_COOKIE_SECURE = process.env.ACCESS_COOKIE_SECURE || '0';
-const ACCESS_COOKIE_SAMESITE = process.env.ACCESS_COOKIE_SAMESITE || 'Strict';
+const ACCESS_COOKIE_SECURE = process.env.ACCESS_COOKIE_SECURE === undefined ? '0' : process.env.ACCESS_COOKIE_SECURE;
+const ACCESS_COOKIE_SAMESITE = process.env.ACCESS_COOKIE_SAMESITE === undefined ? 'Strict' : process.env.ACCESS_COOKIE_SAMESITE;
 const ACCESS_COOKIE = 'pcloud_video_session';
 const ACCESS_COOKIE_MAX_AGE = 12 * 60 * 60;
 if (!['0', '1'].includes(ACCESS_COOKIE_SECURE)) {
