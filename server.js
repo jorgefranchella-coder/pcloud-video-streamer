@@ -54,8 +54,14 @@ function constantTimeEqual(expected, supplied) {
   return expectedBytes.length === suppliedBytes.length && crypto.timingSafeEqual(expectedBytes, suppliedBytes);
 }
 
-function expectedSessionValue() {
-  return crypto.createHmac('sha256', ACCESS_TOKEN).update('pcloud-video-session-v1').digest('base64url');
+function sessionSignature(expiresAt) {
+  return crypto.createHmac('sha256', ACCESS_TOKEN)
+    .update(`pcloud-video-session-v1:${expiresAt}`).digest('base64url');
+}
+
+function createSessionValue() {
+  const expiresAt = Math.floor(Date.now() / 1000) + ACCESS_COOKIE_MAX_AGE;
+  return `${expiresAt}.${sessionSignature(expiresAt)}`;
 }
 
 function hasValidSession(req) {
@@ -63,7 +69,14 @@ function hasValidSession(req) {
   const cookie = cookies.map(value => value.trim()).find(value => value.startsWith(`${ACCESS_COOKIE}=`));
   if (!cookie) return false;
   try {
-    return constantTimeEqual(expectedSessionValue(), decodeURIComponent(cookie.slice(ACCESS_COOKIE.length + 1)));
+    const value = decodeURIComponent(cookie.slice(ACCESS_COOKIE.length + 1));
+    const separator = value.indexOf('.');
+    if (separator < 1 || value.indexOf('.', separator + 1) !== -1) return false;
+    const expiresText = value.slice(0, separator);
+    if (!/^\d+$/.test(expiresText)) return false;
+    const expiresAt = Number(expiresText);
+    if (!Number.isSafeInteger(expiresAt) || expiresAt <= Math.floor(Date.now() / 1000)) return false;
+    return constantTimeEqual(sessionSignature(expiresAt), value.slice(separator + 1));
   } catch {
     return false;
   }
@@ -120,7 +133,7 @@ app.post('/api/access/session', (req, res) => {
   const supplied = typeof req.body?.token === 'string' ? req.body.token : '';
   if (!constantTimeEqual(ACCESS_TOKEN, supplied)) return res.status(401).json({ error: 'Unauthorized' });
   const secure = ACCESS_COOKIE_SECURE === '1' ? '; Secure' : '';
-  res.setHeader('Set-Cookie', `${ACCESS_COOKIE}=${expectedSessionValue()}; Path=/; Max-Age=${ACCESS_COOKIE_MAX_AGE}; HttpOnly; SameSite=${ACCESS_COOKIE_SAMESITE}${secure}`);
+  res.setHeader('Set-Cookie', `${ACCESS_COOKIE}=${createSessionValue()}; Path=/; Max-Age=${ACCESS_COOKIE_MAX_AGE}; HttpOnly; SameSite=${ACCESS_COOKIE_SAMESITE}${secure}`);
   res.json({ authenticated: true });
 });
 
