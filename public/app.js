@@ -991,6 +991,31 @@ function renderIdentityAssignments(item) {
     review.appendChild(list);
     visualPeople.appendChild(review);
   }
+  const history = item.identity_history || [];
+  if (history.length) {
+    const details = document.createElement('details');
+    details.className = 'rounded-lg border border-gray-700 bg-gray-900/40 p-3';
+    const summary = document.createElement('summary');
+    summary.className = 'cursor-pointer text-sm text-gray-300';
+    summary.textContent = `Historial de identificaciones (${history.length}${history.length === 100 ? '+' : ''})`;
+    details.appendChild(summary);
+    const list = document.createElement('ol');
+    list.className = 'mt-2 max-h-48 space-y-2 overflow-y-auto text-xs text-gray-400';
+    for (const change of history) {
+      const entry = document.createElement('li');
+      const from = change.previous_name || 'Sin identificar';
+      const to = change.person_name || 'Sin identificar';
+      const action = change.action === 'reconciled' ? 'Reconciliada'
+        : change.action === 'assigned' ? 'Identificada'
+        : change.action === 'removed' ? 'Quitada' : 'Cambiada';
+      const date = new Date(`${change.changed_at.replace(' ', 'T')}Z`);
+      const when = Number.isNaN(date.getTime()) ? change.changed_at : date.toLocaleString();
+      entry.textContent = `${when} · ${action}: ${from} → ${to} (observación ${change.observation_index + 1})`;
+      list.appendChild(entry);
+    }
+    details.appendChild(list);
+    visualPeople.appendChild(details);
+  }
   if (!observations.length) {
     const empty = document.createElement('p');
     empty.textContent = 'No se detectaron personas en los fotogramas analizados.';

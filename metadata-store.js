@@ -261,6 +261,22 @@ db.exec(`
     merged_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     undone_at TEXT
   );
+  CREATE TABLE IF NOT EXISTS video_person_identity_history (
+    id INTEGER PRIMARY KEY,
+    video_id INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+    analysis_revision TEXT NOT NULL,
+    observation_index INTEGER NOT NULL,
+    previous_person_id INTEGER,
+    previous_name TEXT,
+    person_id INTEGER,
+    person_name TEXT,
+    action TEXT NOT NULL CHECK (action IN ('assigned', 'changed', 'removed', 'reconciled')),
+    stale_revision TEXT,
+    stale_observation_index INTEGER,
+    changed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE INDEX IF NOT EXISTS video_person_identity_history_video_idx
+    ON video_person_identity_history(video_id, id DESC);
   CREATE TABLE IF NOT EXISTS person_merge_observations (
     merge_id INTEGER NOT NULL REFERENCES person_merge_history(id) ON DELETE CASCADE,
     video_id INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
@@ -690,6 +706,12 @@ function staleIdentificationsForVideo(videoId) {
     ORDER BY video_person_observations.confirmed_at DESC, video_person_observations.observation_index`).all(videoId);
 }
 
+function identityHistoryForVideo(videoId) {
+  return db.prepare(`SELECT id, analysis_revision, observation_index, previous_name, person_name,
+      action, stale_revision, stale_observation_index, changed_at
+    FROM video_person_identity_history WHERE video_id = ? ORDER BY id DESC LIMIT 100`).all(videoId);
+}
+
 function setVideoPerson({ relativePath, observationIndex, personId, personName, staleObservation }) {
   const row = getByPath.get(relativePath);
   if (!row || !Number.isInteger(observationIndex) || observationIndex < 0) return false;
@@ -697,6 +719,10 @@ function setVideoPerson({ relativePath, observationIndex, personId, personName, 
   if (row.visual_status !== 'done' || !row.visual_revision || observationIndex >= observations.length) return false;
 
   const assign = db.transaction(() => {
+    const previous = db.prepare(`SELECT video_person_observations.person_id, people.name
+      FROM video_person_observations JOIN people ON people.id = video_person_observations.person_id
+      WHERE video_id = ? AND analysis_revision = ? AND observation_index = ?`)
+      .get(row.id, row.visual_revision, observationIndex);
     if (personName) {
       const name = personName.trim().replace(/\s+/g, ' ');
       if (!name || name.length > 80) throw new Error('El nombre debe tener entre 1 y 80 caracteres');
@@ -727,6 +753,19 @@ function setVideoPerson({ relativePath, observationIndex, personId, personName, 
       if (reviewed.changes !== 1) throw new Error('La asignación anterior ya no está pendiente de revisión');
     }
 
+    const nextPerson = personId == null ? null : db.prepare('SELECT id, name FROM people WHERE id = ?').get(personId);
+    if (staleObservation || (previous?.person_id ?? null) !== (personId ?? null)) {
+      const action = staleObservation ? 'reconciled'
+        : personId == null ? 'removed' : previous ? 'changed' : 'assigned';
+      db.prepare(`INSERT INTO video_person_identity_history
+        (video_id, analysis_revision, observation_index, previous_person_id, previous_name,
+         person_id, person_name, action, stale_revision, stale_observation_index)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(row.id, row.visual_revision, observationIndex, previous?.person_id ?? null, previous?.name ?? null,
+          nextPerson?.id ?? null, nextPerson?.name ?? null, action,
+          staleObservation?.analysisRevision ?? null, staleObservation?.observationIndex ?? null);
+    }
+
     const assignedNames = db.prepare(`SELECT people.name FROM video_person_observations
       JOIN people ON people.id = video_person_observations.person_id
       WHERE video_id = ? AND analysis_revision = ?`).all(row.id, row.visual_revision).map(item => item.name);
@@ -745,7 +784,7 @@ function setVideoPerson({ relativePath, observationIndex, personId, personName, 
 
 module.exports = {
   db, getByPath, getById, upsert, parseVideo, status, search, buildVisualSearchText,
-  setConfirmedPeople, listPeople, identifiedPeopleForVideo, staleIdentificationsForVideo,
+  setConfirmedPeople, listPeople, identifiedPeopleForVideo, staleIdentificationsForVideo, identityHistoryForVideo,
   setVideoPerson, renamePerson, mergePeople, undoPeopleMerge, listPersonMerges,
   withJobLock, setWorkerConfiguration, setWorkerActivity, reserveVisualDailyRequest,
   getVisualProviderControl, setVisualProviderControl, clearVisualProviderControl
