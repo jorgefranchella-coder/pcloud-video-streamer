@@ -381,12 +381,6 @@ function setupVideoEvents() {
 }
 
 // Load directory tree
-function escapeHtml(value) {
-  return String(value).replace(/[&<>"']/g, character => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-  })[character]);
-}
-
 async function loadTree(path) {
   currentPath = path;
   currentPathDisplay.textContent = path === '' ? '/' : `/${path}`;
@@ -422,61 +416,36 @@ function renderTree(items, container) {
   
   items.forEach(item => {
     const li = document.createElement('li');
-    
-    if (item.type === 'folder') {
-      li.innerHTML = `
-        <button 
-          class="folder-btn w-full flex items-center gap-2 px-3 py-2 text-left rounded-lg hover:bg-gray-700 transition-colors text-sm"
-          data-path="${escapeHtml(item.path)}"
-          aria-expanded="false"
-        >
-          <svg class="w-5 h-5 text-yellow-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>
-          </svg>
-          <span class="truncate font-medium">${escapeHtml(item.name)}</span>
-          <svg class="w-4 h-4 text-gray-500 ml-auto folder-chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
-          </svg>
-        </button>
-      `;
-      const btn = li.querySelector('.folder-btn');
-      btn.addEventListener('click', () => {
-        const isExpanded = btn.getAttribute('aria-expanded') === 'true';
-        btn.setAttribute('aria-expanded', !isExpanded);
-        const chevron = btn.querySelector('.folder-chevron');
-        chevron.style.transform = isExpanded ? 'rotate(0deg)' : 'rotate(90deg)';
-        
-        // Load subfolder contents inline (lazy loading)
-        if (!isExpanded) {
-          loadSubfolder(item.path, li);
-        } else {
-          // Remove subfolder content
-          const subUl = li.querySelector('ul.subfolder');
-          if (subUl) subUl.remove();
-        }
-      });
-    } else {
-      li.innerHTML = `
-        <button 
-          class="video-btn w-full flex items-center gap-2 px-3 py-2 text-left rounded-lg hover:bg-gray-700 transition-colors text-sm"
-          data-path="${escapeHtml(item.path)}"
-        >
-          <svg class="w-5 h-5 text-green-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/>
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-          </svg>
-          <span class="truncate">${escapeHtml(item.name)}</span>
-        </button>
-      `;
-      const btn = li.querySelector('.video-btn');
-      btn.addEventListener('click', () => playVideo(item.path, item.name));
-    }
-    
+    li.appendChild(createTreeButton(item, li));
     ul.appendChild(li);
   });
   
   container.innerHTML = '';
   container.appendChild(ul);
+}
+
+function createTreeButton(item, parentLi) {
+  const folder = item.type === 'folder';
+  const button = document.createElement('button');
+  button.className = `${folder ? 'folder-btn' : 'video-btn'} w-full flex items-center gap-2 px-3 py-2 text-left rounded-lg hover:bg-gray-700 transition-colors text-sm`;
+  button.dataset.path = item.path;
+  if (folder) {
+    button.setAttribute('aria-expanded', 'false');
+    button.innerHTML = '<svg class="w-5 h-5 text-yellow-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg><span class="truncate font-medium"></span><svg class="w-4 h-4 text-gray-500 ml-auto folder-chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>';
+    button.querySelector('span').textContent = item.name;
+    button.addEventListener('click', () => {
+      const expanded = button.getAttribute('aria-expanded') === 'true';
+      button.setAttribute('aria-expanded', String(!expanded));
+      button.querySelector('.folder-chevron').style.transform = expanded ? 'rotate(0deg)' : 'rotate(90deg)';
+      if (expanded) parentLi.querySelector('ul.subfolder')?.remove();
+      else loadSubfolder(item.path, parentLi);
+    });
+  } else {
+    button.innerHTML = '<svg class="w-5 h-5 text-green-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg><span class="truncate"></span>';
+    button.querySelector('span').textContent = item.name;
+    button.addEventListener('click', () => playVideo(item.path, item.name));
+  }
+  return button;
 }
 
 async function loadSubfolder(folderPath, parentLi) {
@@ -492,54 +461,7 @@ async function loadSubfolder(folderPath, parentLi) {
       
       data.items.forEach(item => {
         const li = document.createElement('li');
-        
-        if (item.type === 'folder') {
-          li.innerHTML = `
-            <button 
-              class="folder-btn w-full flex items-center gap-2 px-3 py-2 text-left rounded-lg hover:bg-gray-700 transition-colors text-sm"
-              data-path="${escapeHtml(item.path)}"
-              aria-expanded="false"
-            >
-              <svg class="w-5 h-5 text-yellow-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>
-              </svg>
-              <span class="truncate font-medium">${escapeHtml(item.name)}</span>
-              <svg class="w-4 h-4 text-gray-500 ml-auto folder-chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
-              </svg>
-            </button>
-          `;
-          const btn = li.querySelector('.folder-btn');
-          btn.addEventListener('click', () => {
-            const isExpanded = btn.getAttribute('aria-expanded') === 'true';
-            btn.setAttribute('aria-expanded', !isExpanded);
-            const chevron = btn.querySelector('.folder-chevron');
-            chevron.style.transform = isExpanded ? 'rotate(0deg)' : 'rotate(90deg)';
-            
-            if (!isExpanded) {
-              loadSubfolder(item.path, li);
-            } else {
-              const sub = li.querySelector('ul.subfolder');
-              if (sub) sub.remove();
-            }
-          });
-        } else {
-          li.innerHTML = `
-            <button 
-              class="video-btn w-full flex items-center gap-2 px-3 py-2 text-left rounded-lg hover:bg-gray-700 transition-colors text-sm"
-              data-path="${escapeHtml(item.path)}"
-            >
-              <svg class="w-5 h-5 text-green-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/>
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-              </svg>
-              <span class="truncate">${escapeHtml(item.name)}</span>
-            </button>
-          `;
-          const btn = li.querySelector('.video-btn');
-          btn.addEventListener('click', () => playVideo(item.path, item.name));
-        }
-        
+        li.appendChild(createTreeButton(item, li));
         subUl.appendChild(li);
       });
       
@@ -551,33 +473,36 @@ async function loadSubfolder(folderPath, parentLi) {
 }
 
 function renderBreadcrumbs(path) {
-  breadcrumbList.innerHTML = '';
-  
-  // Root
+  breadcrumbList.replaceChildren();
+
   const rootLi = document.createElement('li');
-  rootLi.innerHTML = `
-    <button class="breadcrumb-btn hover:text-white transition-colors" data-path="">/</button>
-  `;
-  rootLi.querySelector('.breadcrumb-btn').addEventListener('click', () => loadTree(''));
+  const rootButton = document.createElement('button');
+  rootButton.className = 'breadcrumb-btn hover:text-white transition-colors';
+  rootButton.textContent = '/';
+  rootButton.addEventListener('click', () => loadTree(''));
+  rootLi.appendChild(rootButton);
   breadcrumbList.appendChild(rootLi);
-  
   if (path === '') return;
-  
+
   const parts = path.split('/');
   let accumulated = '';
-  
-  parts.forEach((part, index) => {
+  parts.forEach(part => {
     accumulated += (accumulated ? '/' : '') + part;
-    
+
     const separator = document.createElement('li');
-    separator.innerHTML = '<span class="text-gray-500 mx-1">/</span>';
+    const slash = document.createElement('span');
+    slash.className = 'text-gray-500 mx-1';
+    slash.textContent = '/';
+    separator.appendChild(slash);
     breadcrumbList.appendChild(separator);
-    
+
     const li = document.createElement('li');
-    li.innerHTML = `
-      <button class="breadcrumb-btn hover:text-white transition-colors" data-path="${escapeHtml(accumulated)}">${escapeHtml(part)}</button>
-    `;
-    li.querySelector('.breadcrumb-btn').addEventListener('click', () => loadTree(accumulated));
+    const button = document.createElement('button');
+    button.className = 'breadcrumb-btn hover:text-white transition-colors';
+    button.dataset.path = accumulated;
+    button.textContent = part;
+    button.addEventListener('click', () => loadTree(accumulated));
+    li.appendChild(button);
     breadcrumbList.appendChild(li);
   });
 }
