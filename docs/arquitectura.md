@@ -47,7 +47,7 @@ Las fechas candidatas proceden de etiquetas de captura de contenedor/streams, de
 3. Comprueba ruta real, tamaño y mtime contra el fingerprint guardado.
 4. Extrae imágenes al 8 %, 35 %, 65 % y 92 % de la duración, redondeando a segundos y eliminando duplicados. Usa el segundo cero si no hay duración o es menor a dos segundos.
 5. Genera JPEG de hasta 768 × 768 conservando proporciones, con 45 segundos de timeout por extracción. Rechaza una imagen mayor de 700.000 bytes. Si falla algún fotograma puede continuar con los restantes; si fallan todos, falla el video.
-6. Envía las imágenes en memoria, codificadas en base64, y sus tiempos al endpoint `/chat/completions`. Solicita JSON Schema, soporte de parámetros y un máximo de 2.000 tokens de salida, con timeout de 120 segundos.
+6. Envía las imágenes en memoria, codificadas en base64, y sus tiempos al endpoint `/chat/completions` usando HTTPS y sin seguir redirecciones. Solicita JSON Schema, soporte de parámetros y un máximo de 2.000 tokens de salida, con timeout de 120 segundos. Limita la respuesta normal a 1 MiB y los cuerpos de error a 16 KiB.
 7. Parsea JSON y valida tipos, tamaños de listas e índices de fotogramas. Convierte cada referencia en `at_seconds`. El prompt vigente es `visual-v2` y pide textos en español sin nombres inferidos.
 8. Revalida el archivo antes de guardar. Persiste ficha, nueva revisión, modelo configurado, versión de prompt, uso reportado y fingerprint; reconstruye el texto de búsqueda. Las asociaciones anteriores quedan guardadas como pendientes de revisión y no se aplican a la revisión nueva.
 
