@@ -755,13 +755,46 @@ function renderIdentityAssignments(item) {
     const heading = document.createElement('strong');
     heading.textContent = 'Asignaciones de una ficha anterior: revisalas';
     review.appendChild(heading);
-    const list = document.createElement('ul');
-    list.className = 'mt-2 list-inside list-disc space-y-1';
+    const list = document.createElement('div');
+    list.className = 'mt-2 space-y-2';
     stale.forEach(previous => {
-      const entry = document.createElement('li');
+      const entry = document.createElement('div');
+      entry.className = 'rounded border border-amber-800/70 p-2';
       const description = previous.description || 'Observación sin descripción';
       const time = `${Math.floor(previous.at_seconds / 60)}:${String(Math.floor(previous.at_seconds % 60)).padStart(2, '0')}`;
-      entry.textContent = `${previous.name}: ${description} (${time})`;
+      const summary = document.createElement('p');
+      summary.textContent = `${previous.name}: ${description} (${time})`;
+      entry.appendChild(summary);
+      if (observations.length && item.can_edit_people) {
+        const controls = document.createElement('div');
+        controls.className = 'mt-2 flex flex-col gap-2 sm:flex-row';
+        const select = document.createElement('select');
+        select.className = 'min-w-0 flex-1 rounded border border-amber-800 bg-gray-900 px-2 py-2 text-sm text-white';
+        select.setAttribute('aria-label', `Elegir observación actual para reasignar a ${previous.name}`);
+        const placeholder = document.createElement('option');
+        placeholder.value = '';
+        placeholder.textContent = 'Elegí una observación de la ficha actual…';
+        select.appendChild(placeholder);
+        observations.forEach((observation, index) => {
+          const option = document.createElement('option');
+          option.value = String(index);
+          option.textContent = `${observation.description} (${Math.floor(observation.at_seconds / 60)}:${String(Math.floor(observation.at_seconds % 60)).padStart(2, '0')})`;
+          select.appendChild(option);
+        });
+        const apply = document.createElement('button');
+        apply.type = 'button';
+        apply.className = 'rounded bg-amber-700 px-3 py-2 text-sm hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-50';
+        apply.textContent = 'Reasignar';
+        apply.disabled = true;
+        select.addEventListener('change', () => { apply.disabled = select.value === ''; });
+        apply.addEventListener('click', async () => {
+          if (select.value === '') return;
+          apply.disabled = true;
+          await saveObservationIdentity(Number(select.value), { person_id: previous.person_id });
+        });
+        controls.append(select, apply);
+        entry.appendChild(controls);
+      }
       list.appendChild(entry);
     });
     review.appendChild(list);
