@@ -38,6 +38,18 @@ async function main() {
   const complete = await fs.promises.readFile(completePath, 'utf8');
   if (complete.trim() !== 'ok') throw new Error('Backup completion marker is invalid');
   const manifest = JSON.parse(await fs.promises.readFile(manifestPath, 'utf8'));
+  if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
+    throw new Error('Backup manifest must be a JSON object');
+  }
+  if (typeof manifest.created_at !== 'string' || !Number.isFinite(Date.parse(manifest.created_at))) {
+    throw new Error('Backup manifest has an invalid creation date');
+  }
+  if (typeof manifest.evidence_copied !== 'boolean'
+    || !Number.isSafeInteger(manifest.evidence_files) || manifest.evidence_files < 0
+    || !Number.isSafeInteger(manifest.evidence_bytes) || manifest.evidence_bytes < 0
+    || !Number.isSafeInteger(manifest.stale_locks_removed) || manifest.stale_locks_removed < 0) {
+    throw new Error('Backup manifest has invalid evidence or lock counts');
+  }
   if (manifest.sqlite_integrity_check !== 'ok') throw new Error('Manifest does not report a clean SQLite integrity check');
 
   const databasePath = path.join(backupDir, 'videos.sqlite');
@@ -62,6 +74,9 @@ async function main() {
     currentEvidenceReferences = db.prepare(`SELECT id, visual_revision, visual_evidence_json
       FROM videos WHERE visual_revision IS NOT NULL AND visual_fingerprint = fingerprint`).all()
       .flatMap(video => {
+        if (!Number.isSafeInteger(video.id) || video.id < 1) {
+          throw new Error('Invalid video ID in current evidence reference');
+        }
         let entries;
         try { entries = JSON.parse(video.visual_evidence_json || '[]'); }
         catch { throw new Error(`Invalid visual evidence JSON for video ${video.id}`); }
@@ -71,7 +86,8 @@ async function main() {
           throw new Error(`Invalid active evidence revision for video ${video.id}`);
         }
         return entries.map(item => {
-          if (!Number.isSafeInteger(item.at_seconds) || item.at_seconds < 0 || item.at_seconds > 999999) {
+          if (!item || typeof item !== 'object' || Array.isArray(item)
+            || !Number.isSafeInteger(item.at_seconds) || item.at_seconds < 0 || item.at_seconds > 999999) {
             throw new Error(`Invalid evidence timestamp for video ${video.id}`);
           }
           return { videoId: video.id, revision: video.visual_revision, atSeconds: item.at_seconds };
