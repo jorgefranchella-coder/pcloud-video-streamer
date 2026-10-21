@@ -6,7 +6,7 @@
 
 Usar Node.js 22+, npm y ffmpeg/ffprobe. Para montar pCloud se necesitan rclone, FUSE y las credenciales configuradas por el administrador. systemd es opcional para ejecución local; Docker es una alternativa al proceso web instalado en el host.
 
-Los tres procesos deben compartir exactamente `VIDEO_ROOT` y `DATA_DIR`. La base vive en disco local persistente. Por defecto, `DATA_DIR` es `data` junto a `metadata-store.js`, no necesariamente el directorio desde el que se invocó Node. Ejecutar el servidor desde la raíz del proyecto: `express.static('public')` sí depende del directorio de trabajo.
+Los tres procesos deben compartir exactamente `VIDEO_ROOT` y `DATA_DIR`. La base vive en disco local persistente. Por defecto, `DATA_DIR` es `data` junto a `metadata-store.js`, no necesariamente el directorio desde el que se invocó Node. Los archivos estáticos se resuelven desde el directorio del proyecto.
 
 El proyecto no carga archivos `.env` automáticamente. Para una ejecución manual hay que exportar variables en la terminal, usar mecanismos de entorno de Node compatibles o inyectarlas desde el gestor de procesos. Un archivo en `/etc` solo afecta al servicio que lo declara en `EnvironmentFile`.
 

@@ -93,7 +93,7 @@ app.use('/api', (_req, res, next) => {
   next();
 });
 app.use(express.json({ limit: '4kb' }));
-app.use(express.static('public'));
+app.use(express.static(path.join(__dirname, 'public')));
 
 app.get('/api/access/status', (req, res) => {
   res.json({ required: Boolean(ACCESS_TOKEN), authenticated: !ACCESS_TOKEN || hasValidSession(req) });
