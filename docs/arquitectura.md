@@ -26,7 +26,7 @@ flowchart LR
 
 La aplicación lee archivos a través del montaje; no utiliza directamente la API de pCloud. rclone administra credenciales, acceso remoto y caché. Aunque solo se envían fotogramas a OpenRouter, leer y buscar posiciones con ffprobe/ffmpeg puede descargar una cantidad importante del archivo a la caché local.
 
-El servidor, el indexador y el analizador son procesos independientes que comparten una base SQLite local. La API no ofrece rutas para arrancar trabajos. systemd ejecuta los procesos; solo el indexador tiene un temporizador incluido. El indexador y el analizador reclaman bloqueos SQLite separados antes de trabajar; una segunda instancia de la misma etapa termina con error. Los bloqueos huérfanos del mismo host se recuperan al detectar que el PID ya no existe.
+El servidor, el indexador y el analizador son procesos independientes que comparten una base SQLite local. La API no ofrece rutas para arrancar trabajos. systemd ejecuta los procesos; solo el indexador tiene un temporizador incluido. El indexador y el analizador reclaman en una transacción un bloqueo SQLite común para toda la biblioteca y otro propio de su etapa; una segunda tarea concurrente termina con error. Los bloqueos huérfanos del mismo host se recuperan al detectar que el PID ya no existe.
 
 ## Inventario y extracción técnica
 
@@ -42,7 +42,7 @@ Las fechas candidatas proceden de etiquetas de captura de contenedor/streams, de
 
 ## Análisis visual
 
-1. Reclama el bloqueo exclusivo de la etapa visual, registra la configuración sin secretos y exige `OPENROUTER_API_KEY`. Si una instancia anterior dejó filas `running`, las convierte en fallidas con reintento diferido.
+1. Reclama en una transacción el bloqueo común de biblioteca y el de la etapa visual, registra la configuración sin secretos y exige `OPENROUTER_API_KEY`. Si una instancia anterior dejó filas `running`, las convierte en fallidas con reintento diferido.
 2. Selecciona videos con estado técnico `done`, prioriza pendientes y después fallidos transitorios vencidos cuando `RETRY_VISUAL_FAILED=1`. `VISUAL_VIDEO_ID` selecciona un video concreto para regenerarlo. El máximo automático de intentos por fingerprint es cinco por defecto.
 3. Comprueba ruta real, tamaño y mtime contra el fingerprint guardado.
 4. Extrae imágenes al 8 %, 35 %, 65 % y 92 % de la duración, redondeando a segundos y eliminando duplicados. Usa el segundo cero si no hay duración o es menor a dos segundos.

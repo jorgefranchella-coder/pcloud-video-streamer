@@ -103,19 +103,25 @@ function finishWorkerRun(worker, status, error = null) {
 function withJobLock(name, operation) {
   const token = crypto.randomUUID();
   const host = os.hostname();
+  const lockNames = [...new Set([name, 'video-library-pipeline'])];
   const acquire = db.transaction(() => {
-    const current = db.prepare('SELECT owner_token, owner_pid, owner_host FROM process_locks WHERE name = ?').get(name);
-    if (current) {
+    const staleLocks = [];
+    for (const lockName of lockNames) {
+      const current = db.prepare('SELECT owner_token, owner_pid, owner_host FROM process_locks WHERE name = ?').get(lockName);
+      if (!current) continue;
       let stale = false;
       if (current.owner_host === host) {
         try { process.kill(current.owner_pid, 0); }
         catch (error) { stale = error.code === 'ESRCH'; }
       }
-      if (!stale) throw new Error(`${name} is already running on ${current.owner_host} (pid ${current.owner_pid})`);
-      db.prepare('DELETE FROM process_locks WHERE name = ? AND owner_token = ?').run(name, current.owner_token);
+      if (!stale) throw new Error(`${lockName} is already running on ${current.owner_host} (pid ${current.owner_pid})`);
+      staleLocks.push({ name: lockName, token: current.owner_token });
     }
-    db.prepare('INSERT INTO process_locks (name, owner_token, owner_pid, owner_host) VALUES (?, ?, ?, ?)')
-      .run(name, token, process.pid, host);
+    for (const stale of staleLocks) {
+      db.prepare('DELETE FROM process_locks WHERE name = ? AND owner_token = ?').run(stale.name, stale.token);
+    }
+    const insert = db.prepare('INSERT INTO process_locks (name, owner_token, owner_pid, owner_host) VALUES (?, ?, ?, ?)');
+    for (const lockName of lockNames) insert.run(lockName, token, process.pid, host);
   });
   acquire.immediate();
   return (async () => {
@@ -132,7 +138,7 @@ function withJobLock(name, operation) {
       throw error;
     } finally {
       if (heartbeat) clearInterval(heartbeat);
-      db.prepare('DELETE FROM process_locks WHERE name = ? AND owner_token = ?').run(name, token);
+      db.prepare('DELETE FROM process_locks WHERE owner_token = ?').run(token);
     }
   })();
 }

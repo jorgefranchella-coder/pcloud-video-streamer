@@ -72,7 +72,7 @@ Aplicar `sudo systemctl daemon-reload`; el siguiente arranque usará esos valore
 
 ## Ejecución técnica sin privilegios de systemd
 
-Es posible ejecutar el indexador como el usuario con acceso a los videos y a la base. La exclusión SQLite impide que dos indexadores simultáneos recorran la biblioteca; la segunda instancia terminará indicando que el trabajo ya está activo. No borrar manualmente `process_locks` mientras el proceso propietario siga vivo.
+Es posible ejecutar el indexador como el usuario con acceso a los videos y a la base. Un bloqueo SQLite compartido impide que el indexador y el analizador visual recorran o modifiquen la biblioteca al mismo tiempo; también se mantiene la exclusión por etapa para evitar dos instancias iguales. La segunda instancia termina indicando qué bloqueo está ocupado. No borrar manualmente `process_locks` mientras el proceso propietario siga vivo.
 
 ```bash
 cd /home/jorge/orca/workspaces/Video-Home/meta-data-videos
