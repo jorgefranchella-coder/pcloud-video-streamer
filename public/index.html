@@ -52,7 +52,7 @@
     </aside>
 
     <!-- Mobile sidebar toggle -->
-    <button id="mobileMenuBtn" class="lg:hidden fixed top-4 left-4 z-50 p-2 bg-gray-800 rounded-lg border border-gray-700 shadow-lg">
+    <button id="mobileMenuBtn" type="button" class="lg:hidden fixed top-4 left-4 z-50 p-2 bg-gray-800 rounded-lg border border-gray-700 shadow-lg" aria-label="Abrir navegación" aria-controls="mobileSidebar" aria-expanded="false">
       <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
       </svg>
@@ -165,11 +165,11 @@
     </main>
 
     <!-- Mobile sidebar overlay -->
-    <div id="sidebarOverlay" class="fixed inset-0 bg-black/50 z-40 lg:hidden hidden"></div>
-    <aside id="mobileSidebar" class="fixed inset-y-0 left-0 w-72 bg-gray-800 border-r border-gray-700 z-50 lg:hidden transform -translate-x-full transition-transform duration-300">
+    <div id="sidebarOverlay" class="fixed inset-0 bg-black/50 z-40 lg:hidden hidden" aria-hidden="true"></div>
+    <aside id="mobileSidebar" class="fixed inset-y-0 left-0 w-72 bg-gray-800 border-r border-gray-700 z-50 lg:hidden transform -translate-x-full transition-transform duration-300" aria-label="Navegación móvil" aria-hidden="true" inert>
       <div class="p-4 border-b border-gray-700 flex items-center justify-between">
         <h2 class="text-lg font-semibold">Mis Vídeos</h2>
-        <button id="closeSidebar" class="text-gray-400 hover:text-white">
+        <button id="closeSidebar" type="button" class="text-gray-400 hover:text-white" aria-label="Cerrar navegación">
           <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
           </svg>

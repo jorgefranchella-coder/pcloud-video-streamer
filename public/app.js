@@ -1217,12 +1217,23 @@ function renderTimedList(container, label, items, videoItem) {
 
 function openMobileSidebar() {
   mobileSidebar.classList.remove('-translate-x-full');
+  mobileSidebar.inert = false;
+  mobileSidebar.setAttribute('aria-hidden', 'false');
   sidebarOverlay.classList.remove('hidden');
+  mobileMenuBtn.setAttribute('aria-expanded', 'true');
+  document.querySelector('.main-content').inert = true;
   document.body.style.overflow = 'hidden';
+  mobileSearchInput.focus();
 }
 
 function closeMobileSidebar() {
+  const wasOpen = !sidebarOverlay.classList.contains('hidden');
   mobileSidebar.classList.add('-translate-x-full');
+  mobileSidebar.inert = true;
+  mobileSidebar.setAttribute('aria-hidden', 'true');
   sidebarOverlay.classList.add('hidden');
+  mobileMenuBtn.setAttribute('aria-expanded', 'false');
+  document.querySelector('.main-content').inert = false;
   document.body.style.overflow = '';
+  if (wasOpen) mobileMenuBtn.focus();
 }
