@@ -144,6 +144,7 @@ function renderProcessProgress(status) {
   const technicalDone = count(technical.done);
   const visualDone = count(visual.done);
   const retryWait = status.visual_retry_wait || {};
+  const dailyBudget = status.visual_daily_budget || {};
   const retryEnabled = status.worker_configuration?.visual?.retry_failed;
   const retryAt = retryWait.next_at ? new Date(`${retryWait.next_at.replace(' ', 'T')}Z`) : null;
   const retryTime = retryAt && !Number.isNaN(retryAt.getTime())
@@ -169,6 +170,7 @@ function renderProcessProgress(status) {
     count(retryWait.ready_count) && retryEnabled ? `${format(retryWait.ready_count)} listos para reintento` : '',
     count(retryWait.ready_count) && !retryEnabled ? `${format(retryWait.ready_count)} reintentos vencidos · activá RETRY_VISUAL_FAILED` : '',
     count(retryWait.count) > count(retryWait.ready_count) ? `${format(count(retryWait.count) - count(retryWait.ready_count))} esperando reintento${retryTime ? ` · próximo ${retryTime}` : ''}` : '',
+    count(dailyBudget.limit) ? `Solicitudes del proveedor hoy: ${format(dailyBudget.requests)} / ${format(dailyBudget.limit)} UTC${count(dailyBudget.remaining) === 0 ? ' · límite alcanzado, se renueva a las 00:00 UTC' : ''}` : '',
     count(technical.pending) ? `${format(technical.pending)} esperando inventario técnico` : ''
   ].filter(Boolean).join(' · ');
 
@@ -195,7 +197,10 @@ function renderProcessProgress(status) {
   if (configured.visual) {
     const effective = configured.visual;
     const target = effective.video_id ? ` · video puntual ${effective.video_id}` : '';
-    settings.push(`Visual: ${effective.model}, lote ${format(effective.max_visual)}, máximo ${format(effective.max_visual_attempts)} intentos, reintentos ${effective.retry_failed ? 'activos' : 'desactivados'}${target}`);
+    const requestLimit = effective.max_visual_requests_per_day
+      ? `, ${format(effective.max_visual_requests_per_day)} solicitudes/día UTC`
+      : ', solicitudes/día sin límite';
+    settings.push(`Visual: ${effective.model}, lote ${format(effective.max_visual)}, máximo ${format(effective.max_visual_attempts)} intentos${requestLimit}, reintentos ${effective.retry_failed ? 'activos' : 'desactivados'}${target}`);
   }
   effectiveConfiguration.textContent = settings.length
     ? `Configuración efectiva de la última ejecución: ${settings.join(' · ')}`

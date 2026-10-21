@@ -73,6 +73,10 @@ db.exec(`CREATE TABLE IF NOT EXISTS worker_runs (
   last_error TEXT,
   finished_at TEXT
 )`);
+db.exec(`CREATE TABLE IF NOT EXISTS visual_daily_requests (
+  utc_day TEXT PRIMARY KEY,
+  request_count INTEGER NOT NULL DEFAULT 0
+)`);
 
 function startWorkerRun(worker) {
   db.prepare(`INSERT INTO worker_runs
@@ -313,6 +317,9 @@ function status() {
     FROM videos WHERE visual_status = 'failed' AND visual_next_attempt_at IS NOT NULL`).get();
   const workerConfiguration = Object.fromEntries(db.prepare('SELECT worker, configuration_json, updated_at FROM worker_configuration')
     .all().map(row => [row.worker, { ...JSON.parse(row.configuration_json), updated_at: row.updated_at }]));
+  const utcDay = new Date().toISOString().slice(0, 10);
+  const dailyRequests = db.prepare('SELECT request_count FROM visual_daily_requests WHERE utc_day = ?').get(utcDay)?.request_count || 0;
+  const dailyLimit = workerConfiguration.visual?.max_visual_requests_per_day || 0;
   const workerActivity = Object.fromEntries(db.prepare('SELECT * FROM worker_runs').all().map(row => {
     let alive = null;
     if (row.owner_host === os.hostname()) {
@@ -333,10 +340,26 @@ function status() {
     visual_counts: Object.fromEntries(visualCounts.map(row => [row.status, row.count])),
     visual_ready_counts: Object.fromEntries(visualReadyCounts.map(row => [row.status, row.count])),
     visual_retry_wait: visualRetryWait,
+    visual_daily_budget: {
+      utc_day: utcDay, requests: dailyRequests, limit: dailyLimit,
+      remaining: dailyLimit ? Math.max(0, dailyLimit - dailyRequests) : null
+    },
     last_scan: scan || null,
     worker_configuration: workerConfiguration,
     worker_activity: workerActivity
   };
+}
+
+function reserveVisualDailyRequest(limit) {
+  const utcDay = new Date().toISOString().slice(0, 10);
+  const reserve = db.transaction(() => {
+    const count = db.prepare('SELECT request_count FROM visual_daily_requests WHERE utc_day = ?').get(utcDay)?.request_count || 0;
+    if (limit && count >= limit) return false;
+    db.prepare(`INSERT INTO visual_daily_requests (utc_day, request_count) VALUES (?, 1)
+      ON CONFLICT(utc_day) DO UPDATE SET request_count = request_count + 1`).run(utcDay);
+    return true;
+  });
+  return reserve.immediate();
 }
 
 function setWorkerConfiguration(worker, configuration) {
@@ -475,5 +498,5 @@ function setVideoPerson({ relativePath, observationIndex, personId, personName, 
 module.exports = {
   db, getByPath, getById, upsert, parseVideo, status, search, buildVisualSearchText,
   setConfirmedPeople, listPeople, identifiedPeopleForVideo, staleIdentificationsForVideo,
-  setVideoPerson, withJobLock, setWorkerConfiguration, setWorkerActivity
+  setVideoPerson, withJobLock, setWorkerConfiguration, setWorkerActivity, reserveVisualDailyRequest
 };

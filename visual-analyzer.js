@@ -3,7 +3,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
-const { db, buildVisualSearchText, withJobLock, setWorkerConfiguration, setWorkerActivity } = require('./metadata-store');
+const { db, buildVisualSearchText, withJobLock, setWorkerConfiguration, setWorkerActivity, reserveVisualDailyRequest } = require('./metadata-store');
 const { visualConfiguration } = require('./config');
 
 const execFileAsync = promisify(execFile);
@@ -14,6 +14,7 @@ const API_URL = process.env.OPENROUTER_API_URL || 'https://openrouter.ai/api/v1/
 const PROMPT_VERSION = 'visual-v2';
 const MAX_VISUAL = CONFIG.max_visual;
 const MAX_VISUAL_ATTEMPTS = CONFIG.max_visual_attempts;
+const MAX_VISUAL_REQUESTS_PER_DAY = CONFIG.max_visual_requests_per_day;
 const RETRY_FAILED = CONFIG.retry_visual_failed;
 const TARGET_ID = CONFIG.visual_video_id;
 
@@ -110,6 +111,11 @@ async function describeFrames(frames, apiKey) {
       image_url: { url: `data:image/jpeg;base64,${frame.image.toString('base64')}`, detail: 'high' }
     });
   }
+  if (!reserveVisualDailyRequest(MAX_VISUAL_REQUESTS_PER_DAY)) {
+    const error = new Error('Visual daily request budget exhausted');
+    error.code = 'VISUAL_DAILY_BUDGET_EXHAUSTED';
+    throw error;
+  }
   const response = await fetch(API_URL, {
     method: 'POST',
     headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
@@ -151,7 +157,7 @@ async function analyzeVideo(row, apiKey) {
   const claim = db.prepare(`UPDATE videos SET visual_status = 'running', visual_error = NULL,
       visual_attempts = visual_attempts + 1, visual_next_attempt_at = NULL, visual_error_class = NULL
     WHERE id = ? AND fingerprint = ? AND status = 'done' RETURNING visual_attempts`).get(row.id, row.fingerprint);
-  if (!claim) return;
+  if (!claim) return true;
   const attemptNumber = claim.visual_attempts;
   setWorkerActivity('visual-analyzer', { videoId: row.id, path: row.relative_path, phase: 'extrayendo fotogramas' });
   try {
@@ -200,6 +206,16 @@ async function analyzeVideo(row, apiKey) {
     setWorkerActivity('visual-analyzer', { phase: null, result: `Ficha visual guardada para ${row.relative_path}` });
     console.log(JSON.stringify({ video_id: row.id, frames: frames.length, model: MODEL, usage }));
   } catch (error) {
+    if (error.code === 'VISUAL_DAILY_BUDGET_EXHAUSTED') {
+      db.prepare(`UPDATE videos SET visual_status = 'pending', visual_attempts = MAX(visual_attempts - 1, 0),
+          visual_error = NULL, visual_error_class = NULL, visual_next_attempt_at = NULL
+        WHERE id = ? AND fingerprint = ? AND visual_status = 'running'`).run(row.id, row.fingerprint);
+      setWorkerActivity('visual-analyzer', {
+        phase: 'presupuesto diario agotado', videoId: row.id, path: row.relative_path,
+        result: 'Ficha pendiente para el próximo lote, después de las 00:00 UTC'
+      });
+      return false;
+    }
     const message = String(error.message).slice(0, 1000);
     const authenticationFailure = /^OpenRouter HTTP (401|403)\b/.test(message);
     const providerRateLimit = /^OpenRouter HTTP 429\b/.test(message);
@@ -229,6 +245,7 @@ async function analyzeVideo(row, apiKey) {
     console.error(`Visual analysis failed for video ${row.id}: ${error.message}`);
     if (authenticationFailure || providerRateLimit || providerServerFailure) throw error;
   }
+  return true;
 }
 
 async function runLocked() {
@@ -239,6 +256,17 @@ async function runLocked() {
       visual_error_class = CASE WHEN visual_attempts >= ? THEN 'attempt_limit' ELSE 'worker_interrupted' END,
       visual_next_attempt_at = CASE WHEN visual_attempts >= ? THEN NULL ELSE datetime(CURRENT_TIMESTAMP, '+1 minute') END
     WHERE visual_status = 'running'`).run(MAX_VISUAL_ATTEMPTS, MAX_VISUAL_ATTEMPTS);
+  const utcDay = new Date().toISOString().slice(0, 10);
+  const usedToday = db.prepare('SELECT request_count FROM visual_daily_requests WHERE utc_day = ?').get(utcDay)?.request_count || 0;
+  const dailyRemaining = MAX_VISUAL_REQUESTS_PER_DAY
+    ? Math.max(0, MAX_VISUAL_REQUESTS_PER_DAY - usedToday)
+    : MAX_VISUAL;
+  if (dailyRemaining === 0) {
+    setWorkerActivity('visual-analyzer', { phase: 'presupuesto diario agotado', result: `Límite de ${MAX_VISUAL_REQUESTS_PER_DAY} solicitudes alcanzado para ${utcDay} UTC` });
+    console.log(`Visual daily request budget exhausted: ${usedToday}/${MAX_VISUAL_REQUESTS_PER_DAY} UTC`);
+    return;
+  }
+  const batchLimit = Math.min(MAX_VISUAL, dailyRemaining);
   const candidates = Number.isInteger(TARGET_ID) && TARGET_ID > 0
     ? db.prepare("SELECT id, relative_path, fingerprint, duration_ms, confirmed_people_json FROM videos WHERE id = ? AND status = 'done'").all(TARGET_ID)
     : db.prepare(`SELECT id, relative_path, fingerprint, duration_ms, confirmed_people_json FROM videos
@@ -246,8 +274,10 @@ async function runLocked() {
           OR (visual_status = 'failed' AND ? = 1 AND visual_next_attempt_at IS NOT NULL
             AND visual_next_attempt_at <= CURRENT_TIMESTAMP AND visual_attempts < ?))
         ORDER BY CASE WHEN visual_status = 'pending' OR visual_status IS NULL THEN 0 ELSE 1 END, id LIMIT ?`)
-      .all(RETRY_FAILED ? 1 : 0, MAX_VISUAL_ATTEMPTS, MAX_VISUAL);
-  for (const row of candidates) await analyzeVideo(row, apiKey);
+      .all(RETRY_FAILED ? 1 : 0, MAX_VISUAL_ATTEMPTS, batchLimit);
+  for (const row of candidates) {
+    if (!await analyzeVideo(row, apiKey)) break;
+  }
   console.log(`Visual batch: ${candidates.length} video(s) attempted`);
 }
 
@@ -255,6 +285,7 @@ function run() {
   return withJobLock('visual-analyzer', () => {
     setWorkerConfiguration('visual', {
       model: MODEL, max_visual: MAX_VISUAL, max_visual_attempts: MAX_VISUAL_ATTEMPTS,
+      max_visual_requests_per_day: MAX_VISUAL_REQUESTS_PER_DAY,
       retry_failed: RETRY_FAILED,
       video_id: Number.isInteger(TARGET_ID) ? TARGET_ID : null
     });

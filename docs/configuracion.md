@@ -30,10 +30,11 @@ El proyecto no carga archivos `.env` automáticamente. Para una ejecución manua
 | `OPENROUTER_API_URL` | `https://openrouter.ai/api/v1/chat/completions` | Visual; endpoint de inferencia |
 | `MAX_VISUAL` | `1` | Visual; lote entre 1 y 100; `0` no significa ilimitado |
 | `MAX_VISUAL_ATTEMPTS` | `5` | Visual; intentos automáticos máximos por fingerprint, entre 1 y 20 |
+| `MAX_VISUAL_REQUESTS_PER_DAY` | `0` | Visual; solicitudes iniciadas por día UTC; `0` desactiva el límite |
 | `RETRY_VISUAL_FAILED` | Desactivado | Visual; exactamente `1` incluye fallos transitorios cuyo tiempo de espera ya venció |
 | `VISUAL_VIDEO_ID` | Sin definir | Visual; ID positivo selecciona un solo video técnicamente listo, incluso si ya tiene ficha |
 
-Validación al iniciar: `PROBE_TIMEOUT_MS` debe estar entre 1.000 y 600.000; `MAX_PROBES` entre 0 y 1.000.000 (0 significa sin límite); `MAX_VISUAL` entre 1 y 100; `MAX_VISUAL_ATTEMPTS` entre 1 y 20; `VISUAL_VIDEO_ID`, si se define, debe ser un entero positivo; los flags `RETRY_*` aceptan solo `0` o `1`. Un valor inválido detiene ese trabajador con un error explícito. Los errores de autenticación y las respuestas 4xx no se reintentan automáticamente; 429, 5xx y fallos transitorios esperan antes del próximo intento, con un máximo automático por versión del video.
+Validación al iniciar: `PROBE_TIMEOUT_MS` debe estar entre 1.000 y 600.000; `MAX_PROBES` entre 0 y 1.000.000 (0 significa sin límite); `MAX_VISUAL` entre 1 y 100; `MAX_VISUAL_ATTEMPTS` entre 1 y 20; `MAX_VISUAL_REQUESTS_PER_DAY` entre 0 y 5.000 (0 significa sin límite); `VISUAL_VIDEO_ID`, si se define, debe ser un entero positivo; los flags `RETRY_*` aceptan solo `0` o `1`. Un valor inválido detiene ese trabajador con un error explícito. Los errores de autenticación y las respuestas 4xx no se reintentan automáticamente; 429, 5xx y fallos transitorios esperan antes del próximo intento, con un máximo automático por versión del video.
 
 La unidad visual del repositorio declara `MAX_VISUAL=5` y `RETRY_VISUAL_FAILED=1`. El archivo de entorno de systemd puede sobrescribir esas variables. Cada trabajador registra en SQLite los límites/modelo no secretos usados al arrancar. La interfaz muestra la última configuración registrada por cada etapa; no lee ni revela las claves del proveedor.
 
@@ -86,10 +87,11 @@ Crear `/etc/pcloud-video-visual.env` con `sudoedit`. Ejemplo de contenido; reemp
 OPENROUTER_API_KEY=REEMPLAZAR_POR_LA_CLAVE
 OPENROUTER_MODEL=openrouter/free
 MAX_VISUAL=5
+MAX_VISUAL_REQUESTS_PER_DAY=30
 RETRY_VISUAL_FAILED=0
 ```
 
-Este ejemplo elige cinco por lote y no reintenta fallidos automáticamente. Omitir `VISUAL_VIDEO_ID` para procesar la cola; dejarlo fijado provoca que cada arranque vuelva al mismo video.
+Este ejemplo elige cinco por lote, limita a 30 las solicitudes iniciadas en un día UTC y no reintenta fallidos automáticamente. El contador persiste en SQLite y se muestra en la interfaz; las fichas restantes quedan pendientes para el próximo lote manual después de renovarse el límite. Omitir `VISUAL_VIDEO_ID` para procesar la cola; dejarlo fijado provoca que cada arranque vuelva al mismo video.
 
 Para editar identidades, crear `/etc/pcloud-video-metadata.env` con `sudoedit`:
 

@@ -114,6 +114,8 @@ Ejemplo basado en la ejecución documentada, no respuesta fija. Las claves de es
 
 `worker_activity` contiene las claves `indexer` y `visual-analyzer` después de su primer inicio, con `status`, `active`, `stale`, `started_at`, `heartbeat_at`, `current_video_id`, `current_path`, `phase`, `last_result`, `last_error` y `finished_at`. `stale=true` significa que el registro sigue en `running` pero el PID de este mismo host ya no existe.
 
+`visual_daily_budget` informa `utc_day`, solicitudes iniciadas, límite efectivo (`0` significa desactivado) y solicitudes restantes (`null` sin límite). El límite `MAX_VISUAL_REQUESTS_PER_DAY` se aplica antes de cada llamada al proveedor; el contador se persiste por fecha UTC en SQLite. Cuando se alcanza, las fichas no procesadas quedan pendientes para el próximo lote, que debe iniciarse manualmente después de las 00:00 UTC.
+
 `visual_retry_wait` informa cuántos fallos tienen reintento pendiente y el próximo horario. Los errores transitorios usan espera exponencial hasta 24 horas; `429` comienza en cinco minutos y otros transitorios en un minuto. Cada fingerprint admite hasta `MAX_VISUAL_ATTEMPTS` intentos automáticos (por defecto cinco). Los errores `401`, `403` y otros `4xx` no reciben reintento automático. `RETRY_VISUAL_FAILED=1` es necesario para tomar fallos ya vencidos en una ejecución posterior.
 
 ## Búsqueda
