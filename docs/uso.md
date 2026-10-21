@@ -50,6 +50,8 @@ Una observación puede describir un grupo; la interfaz actual permite un único 
 
 Al elegir una persona del directorio, la búsqueda filtra por su ID y no mezcla otras personas con el mismo nombre. Editar el texto de búsqueda quita ese filtro exacto.
 
+Dentro de una carpeta, activar «Buscar solo en esta carpeta» limita los resultados a esa ruta y sus subcarpetas. En la raíz la opción no está disponible.
+
 Por ejemplo: 60 de 3.772 fichas técnicas y 3 de 60 fichas visuales representan **dos denominadores distintos**. Las otras 3.712 todavía necesitan datos técnicos. «Inventario completado» significa que se recorrió todo el árbol; no implica haber terminado todas las fichas.
 
 La consulta se repite cada 15 segundos con la pestaña visible y al volver a ella. Los estados y lotes proceden de SQLite; el indicador de actividad contrasta el PID en el mismo host cuando está disponible. Tras un cierre abrupto pueden quedar estados `running`. Además, el recorrido actualiza `seen_count` cada 100 archivos; puede mostrar cero durante los primeros análisis lentos.

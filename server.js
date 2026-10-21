@@ -122,9 +122,13 @@ app.get('/api/search', (req, res) => {
   if (personId !== null && (!Number.isSafeInteger(personId) || personId < 1)) {
     return res.status(400).json({ error: 'Invalid person_id' });
   }
+  const folder = req.query.folder === undefined || req.query.folder === '' ? null : req.query.folder;
+  if (folder !== null && (typeof folder !== 'string' || folder.length > 1000 || !safeResolve(folder))) {
+    return res.status(400).json({ error: 'Invalid folder' });
+  }
   const limit = Math.min(Math.max(Number.parseInt(req.query.limit, 10) || 50, 1), 100);
   const offset = Math.max(Number.parseInt(req.query.offset, 10) || 0, 0);
-  res.json({ items: metadata.search({ query, from, to, personId, limit, offset }), limit, offset });
+  res.json({ items: metadata.search({ query, from, to, personId, folder, limit, offset }), limit, offset });
 });
 
 app.get('/api/metadata', (req, res) => {

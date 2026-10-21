@@ -9,7 +9,7 @@ Documentación revisada contra el código el **21 de octubre de 2026**. Las cifr
 - Navegación por carpetas y reproducción HTML5 con peticiones HTTP Range.
 - Inventario incremental en SQLite y extracción de duración, resolución, formato y fechas con `ffprobe`.
 - Análisis de hasta cuatro fotogramas mediante **OpenRouter Chat Completions**, con una ficha en español y referencias temporales.
-- Búsqueda textual FTS5, filtros por fecha sugerida y paginación.
+- Búsqueda textual FTS5, filtros por fecha sugerida, persona exacta o carpeta, y paginación.
 - Catálogo de personas: asignación manual de un nombre a cada observación, integrada en el streamer.
 - Panel de progreso técnico y visual, con lotes recientes y contador diario de solicitudes del proveedor.
 

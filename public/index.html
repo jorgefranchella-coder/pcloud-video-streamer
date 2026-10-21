@@ -36,6 +36,7 @@
           <label>Desde<input id="searchFrom" type="date" class="w-full mt-1 rounded bg-gray-900 border border-gray-600 text-white" /></label>
           <label>Hasta<input id="searchTo" type="date" class="w-full mt-1 rounded bg-gray-900 border border-gray-600 text-white" /></label>
         </div>
+        <label class="mt-2 flex items-center gap-2 text-xs text-gray-400"><input id="searchWithinFolder" type="checkbox" disabled />Buscar solo en esta carpeta</label>
         <button id="peopleDirectoryBtn" class="mt-3 w-full px-3 py-2 text-left text-sm rounded bg-gray-700 hover:bg-gray-600">Personas identificadas</button>
       </div>
       
@@ -180,6 +181,7 @@
           <label>Desde<input id="mobileSearchFrom" type="date" class="w-full mt-1 rounded bg-gray-900 border border-gray-600 text-white" /></label>
           <label>Hasta<input id="mobileSearchTo" type="date" class="w-full mt-1 rounded bg-gray-900 border border-gray-600 text-white" /></label>
         </div>
+        <label class="mt-2 flex items-center gap-2 text-xs text-gray-400"><input id="mobileSearchWithinFolder" type="checkbox" disabled />Buscar solo en esta carpeta</label>
         <button id="mobilePeopleDirectoryBtn" class="mt-3 w-full px-3 py-2 text-left text-sm rounded bg-gray-700 hover:bg-gray-600">Personas identificadas</button>
       </div>
       <nav class="flex-1 p-3 folder-tree overflow-y-auto" id="mobileFolderTree" role="tree" aria-label="Estructura de carpetas"></nav>

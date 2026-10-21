@@ -21,7 +21,7 @@ Errores comunes de edición: `503` si no se configuró el token, `401` si no coi
 | `GET /api/stream` | `path` obligatorio; entrega archivo, acepta rango simple |
 | `GET /api/metadata` | `path` obligatorio; ficha del índice |
 | `GET /api/index/status` | Conteos, último recorrido y configuración efectiva no secreta registrada por cada trabajador |
-| `GET /api/search` | `q`, `from`, `to`, `person_id`, `limit`, `offset` |
+| `GET /api/search` | `q`, `from`, `to`, `person_id`, `folder`, `limit`, `offset` |
 | `GET /api/people` | Catálogo de nombres y cantidades |
 | `PUT /api/metadata/person` | Asociación de una observación con un nombre |
 | `PATCH /api/metadata/people` | Lista general de nombres de compatibilidad |
@@ -136,10 +136,11 @@ curl -fsS --get http://127.0.0.1:3001/api/search \
 | `q` | Se recorta a 100 caracteres; hasta ocho palabras Unicode, prefijos unidos con AND. Vacío lista sin condición FTS |
 | `from`, `to` | Formato `YYYY-MM-DD`, inclusivos sobre `recorded_at`; se valida forma, no calendario completo. Formatos inválidos se ignoran |
 | `person_id` | ID positivo; filtra asociaciones manuales activas de la revisión actual. IDs inválidos devuelven `400` |
+| `folder` | Ruta relativa; incluye esa carpeta y sus descendientes, con límite de ruta segura. Vacío omite el filtro; rutas inválidas devuelven `400` |
 | `limit` | Por defecto 50, entre 1 y 100 |
 | `offset` | Por defecto 0, mínimo 0 |
 
-Respuesta `{ "items": [...], "limit": 50, "offset": 0 }`. Cada item incluye ID, ruta, fecha/fuente, estado técnico, título y resumen visual. No incluye total, snippets ni puntuación. No existe filtro por carpeta. La ordenación es fecha descendente con fechas desconocidas al final, seguida por ruta.
+Respuesta `{ "items": [...], "limit": 50, "offset": 0 }`. Cada item incluye ID, ruta, fecha/fuente, estado técnico, título y resumen visual. No incluye total, snippets ni puntuación. La ordenación es fecha descendente con fechas desconocidas al final, seguida por ruta.
 
 ## Personas
 

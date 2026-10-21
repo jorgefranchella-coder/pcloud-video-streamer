@@ -1,5 +1,6 @@
 // State
 let currentPath = '';
+let searchFolderPath = '';
 let pathHistory = [''];
 let historyIndex = 0;
 
@@ -25,8 +26,10 @@ const searchInput = document.getElementById('searchInput');
 const mobileSearchInput = document.getElementById('mobileSearchInput');
 const searchFrom = document.getElementById('searchFrom');
 const searchTo = document.getElementById('searchTo');
+const searchWithinFolder = document.getElementById('searchWithinFolder');
 const mobileSearchFrom = document.getElementById('mobileSearchFrom');
 const mobileSearchTo = document.getElementById('mobileSearchTo');
+const mobileSearchWithinFolder = document.getElementById('mobileSearchWithinFolder');
 const metadataPanel = document.getElementById('metadataPanel');
 const metadataStatus = document.getElementById('metadataStatus');
 const metadataDuration = document.getElementById('metadataDuration');
@@ -280,11 +283,17 @@ function setupEventListeners() {
       clearTimeout(searchTimer);
       const requestId = ++searchRequestId;
       const value = input.value.trim();
-      if (!value && !searchFrom.value && !searchTo.value) {
+      if (!value && !searchFrom.value && !searchTo.value && !isScopedFolderSearch()) {
         loadTree(currentPath);
       } else {
         searchTimer = setTimeout(() => searchVideos(value, 0, requestId), 250);
       }
+    });
+  }
+  for (const [checkbox, other] of [[searchWithinFolder, mobileSearchWithinFolder], [mobileSearchWithinFolder, searchWithinFolder]]) {
+    checkbox.addEventListener('change', () => {
+      other.checked = checkbox.checked;
+      updateSearch();
     });
   }
   for (const [input, other] of [[searchFrom, mobileSearchFrom], [searchTo, mobileSearchTo], [mobileSearchFrom, searchFrom], [mobileSearchTo, searchTo]]) {
@@ -309,22 +318,38 @@ function updateSearch() {
   clearTimeout(searchTimer);
   const requestId = ++searchRequestId;
   const query = searchInput.value.trim();
-  if (!query && !searchFrom.value && !searchTo.value) loadTree(currentPath);
+  if (!query && !searchFrom.value && !searchTo.value && !selectedPersonId && !isScopedFolderSearch()) loadTree(currentPath);
   else searchVideos(query, 0, requestId);
 }
 
-async function searchVideos(query, offset, requestId) {
+function isScopedFolderSearch() {
+  return Boolean(searchFolderPath && (searchWithinFolder.checked || mobileSearchWithinFolder.checked));
+}
+
+function setSearchFolderPath(path) {
+  searchFolderPath = path;
+  const canSearchFolder = Boolean(path);
+  searchWithinFolder.disabled = !canSearchFolder;
+  mobileSearchWithinFolder.disabled = !canSearchFolder;
+  if (!canSearchFolder) {
+    searchWithinFolder.checked = false;
+    mobileSearchWithinFolder.checked = false;
+  }
+}
+
+async function searchVideos(query, offset, requestId, folder = isScopedFolderSearch() ? searchFolderPath : null) {
   try {
     const params = new URLSearchParams({ q: query, offset: String(offset), limit: String(SEARCH_PAGE_SIZE) });
     if (searchFrom.value) params.set('from', searchFrom.value);
     if (searchTo.value) params.set('to', searchTo.value);
     if (selectedPersonId) params.set('person_id', String(selectedPersonId));
+    if (folder) params.set('folder', folder);
     const response = await fetch(`${API_BASE}/api/search?${params}`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
     if (requestId !== searchRequestId) return;
-    renderSearchResults(data.items, folderTree, query, offset, requestId);
-    renderSearchResults(data.items, mobileFolderTree, query, offset, requestId);
+    renderSearchResults(data.items, folderTree, query, offset, requestId, folder);
+    renderSearchResults(data.items, mobileFolderTree, query, offset, requestId, folder);
     breadcrumbs.classList.add('hidden');
   } catch (error) {
     if (requestId === searchRequestId) {
@@ -334,7 +359,7 @@ async function searchVideos(query, offset, requestId) {
   }
 }
 
-function renderSearchResults(items, container, query, offset, requestId) {
+function renderSearchResults(items, container, query, offset, requestId, folder) {
   if (offset === 0) container.replaceChildren();
   container.querySelector('.search-more')?.remove();
   if (!items.length && offset === 0) {
@@ -370,7 +395,7 @@ function renderSearchResults(items, container, query, offset, requestId) {
     button.textContent = 'Ver más resultados';
     button.addEventListener('click', () => {
       document.querySelectorAll('.search-more').forEach(element => element.remove());
-      searchVideos(query, offset + items.length, requestId);
+      searchVideos(query, offset + items.length, requestId, folder);
     });
     more.appendChild(button);
     list.appendChild(more);
@@ -408,6 +433,7 @@ function setupVideoEvents() {
 // Load directory tree
 async function loadTree(path) {
   currentPath = path;
+  setSearchFolderPath(path);
   currentPathDisplay.textContent = path === '' ? '/' : `/${path}`;
   
   folderTree.innerHTML = '<div class="text-center text-gray-500 py-8">Cargando...</div>';
@@ -459,6 +485,7 @@ function createTreeButton(item, parentLi) {
     button.innerHTML = '<svg class="w-5 h-5 text-yellow-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg><span class="truncate font-medium"></span><svg class="w-4 h-4 text-gray-500 ml-auto folder-chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>';
     button.querySelector('span').textContent = item.name;
     button.addEventListener('click', () => {
+      setSearchFolderPath(item.path);
       const expanded = button.getAttribute('aria-expanded') === 'true';
       button.setAttribute('aria-expanded', String(!expanded));
       button.querySelector('.folder-chevron').style.transform = expanded ? 'rotate(0deg)' : 'rotate(90deg)';
