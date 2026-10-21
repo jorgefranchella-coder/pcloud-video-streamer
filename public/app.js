@@ -732,7 +732,7 @@ function renderPeopleDirectory() {
   }
   for (const person of knownPeople) {
     const row = document.createElement('div');
-    row.className = 'flex items-center gap-2 rounded-lg px-2 py-2 hover:bg-gray-700';
+    row.className = 'flex flex-wrap items-center gap-2 rounded-lg px-2 py-2 hover:bg-gray-700';
     const button = document.createElement('button');
     button.className = 'flex min-w-0 flex-1 items-center justify-between gap-3 py-1 text-left';
     const name = document.createElement('span');
@@ -768,8 +768,36 @@ function renderPeopleDirectory() {
         merge.className = 'shrink-0 rounded border border-amber-800 px-2 py-1 text-xs text-amber-200 hover:bg-amber-900';
         merge.textContent = 'Combinar';
         merge.setAttribute('aria-label', `Combinar ${person.name} con otra persona`);
-        merge.addEventListener('click', () => mergeDirectoryPerson(person));
+        merge.addEventListener('click', () => {
+          const panel = row.querySelector('[data-merge-panel]');
+          panel.classList.toggle('hidden');
+          if (!panel.classList.contains('hidden')) panel.querySelector('select').focus();
+        });
         row.appendChild(merge);
+        const panel = document.createElement('div');
+        panel.dataset.mergePanel = 'true';
+        panel.className = 'hidden flex w-full flex-wrap items-center gap-2 border-t border-gray-700 pt-2';
+        const targetSelect = document.createElement('select');
+        targetSelect.className = 'min-w-0 flex-1 rounded border border-gray-600 bg-gray-900 px-2 py-2 text-sm';
+        targetSelect.setAttribute('aria-label', `Persona destino para ${person.name}`);
+        for (const target of knownPeople.filter(item => item.id !== person.id)) {
+          const option = document.createElement('option');
+          option.value = String(target.id);
+          option.textContent = `${target.name} · ${target.videos} ${target.videos === 1 ? 'video' : 'videos'}`;
+          targetSelect.appendChild(option);
+        }
+        const confirmMerge = document.createElement('button');
+        confirmMerge.type = 'button';
+        confirmMerge.className = 'rounded bg-amber-700 px-3 py-2 text-sm hover:bg-amber-600';
+        confirmMerge.textContent = 'Continuar';
+        confirmMerge.addEventListener('click', () => mergeDirectoryPerson(person, Number(targetSelect.value)));
+        const cancelMerge = document.createElement('button');
+        cancelMerge.type = 'button';
+        cancelMerge.className = 'rounded border border-gray-600 px-3 py-2 text-sm hover:bg-gray-700';
+        cancelMerge.textContent = 'Cancelar';
+        cancelMerge.addEventListener('click', () => panel.classList.add('hidden'));
+        panel.append(targetSelect, confirmMerge, cancelMerge);
+        row.appendChild(panel);
       }
     }
     peopleDirectory.appendChild(row);
@@ -805,12 +833,8 @@ async function renameDirectoryPerson(person) {
   }
 }
 
-async function mergeDirectoryPerson(source) {
+async function mergeDirectoryPerson(source, targetId) {
   const targets = knownPeople.filter(person => person.id !== source.id);
-  const choices = targets.map(person => `${person.id}: ${person.name}`).join('\n');
-  const rawTargetId = window.prompt(`Combiná “${source.name}” dentro de esta persona. Escribí el ID destino:\n${choices}`);
-  if (rawTargetId == null) return;
-  const targetId = Number(rawTargetId.trim());
   const target = targets.find(person => person.id === targetId);
   if (!target) {
     window.alert('Ese ID no corresponde a otra persona del catálogo.');
