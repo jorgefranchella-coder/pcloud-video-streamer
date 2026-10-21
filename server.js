@@ -145,7 +145,38 @@ app.get('/api/index/status', async (_req, res) => {
 });
 
 app.get('/api/people', (_req, res) => {
-  res.json({ items: metadata.listPeople(), can_edit_people: Boolean(process.env.METADATA_EDIT_TOKEN) });
+  res.json({ items: metadata.listPeople(), merges: metadata.listPersonMerges(),
+    can_edit_people: Boolean(process.env.METADATA_EDIT_TOKEN) });
+});
+
+app.patch('/api/people/:id/merge', (req, res) => {
+  if (!authorizeMetadataEdit(req, res)) return;
+  const sourceId = /^\d+$/.test(req.params.id) ? Number(req.params.id) : NaN;
+  const targetId = Number.isSafeInteger(req.body?.target_person_id) ? req.body.target_person_id : NaN;
+  if (!Number.isSafeInteger(sourceId) || sourceId < 1 || !Number.isSafeInteger(targetId) || targetId < 1) {
+    return res.status(400).json({ error: 'Invalid source or target person ID' });
+  }
+  try {
+    const merge = metadata.mergePeople(sourceId, targetId);
+    if (!merge) return res.status(404).json({ error: 'Source or target person not found' });
+    res.json({ merge, items: metadata.listPeople(), merges: metadata.listPersonMerges() });
+  } catch (error) {
+    const conflict = error.message.includes('fusión activa');
+    res.status(conflict ? 409 : 400).json({ error: error.message });
+  }
+});
+
+app.post('/api/people/merges/:id/undo', (req, res) => {
+  if (!authorizeMetadataEdit(req, res)) return;
+  const mergeId = /^\d+$/.test(req.params.id) ? Number(req.params.id) : NaN;
+  if (!Number.isSafeInteger(mergeId) || mergeId < 1) return res.status(400).json({ error: 'Invalid merge ID' });
+  try {
+    const merge = metadata.undoPeopleMerge(mergeId);
+    if (!merge) return res.status(404).json({ error: 'Active merge not found' });
+    res.json({ merge, items: metadata.listPeople(), merges: metadata.listPersonMerges() });
+  } catch (error) {
+    res.status(409).json({ error: error.message });
+  }
 });
 
 app.patch('/api/people/:id', (req, res) => {
@@ -158,7 +189,7 @@ app.patch('/api/people/:id', (req, res) => {
   try {
     const person = metadata.renamePerson(id, name);
     if (!person) return res.status(404).json({ error: 'Person not found' });
-    res.json({ person, items: metadata.listPeople() });
+    res.json({ person, items: metadata.listPeople(), merges: metadata.listPersonMerges() });
   } catch (error) {
     res.status(error.message.startsWith('Ya existe') ? 409 : 400).json({ error: error.message });
   }

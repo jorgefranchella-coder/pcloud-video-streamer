@@ -70,8 +70,10 @@ Archivo: `DATA_DIR/videos.sqlite`. Se habilitan WAL, claves foráneas y espera d
 | `visual_provider_control` | Pausa persistente por error de configuración o espera de proveedor |
 | `DATA_DIR/evidence/<video_id>/<revision>/*.jpg` | Fotogramas usados como evidencia; solo los de la revisión activa se sirven por la API autenticada |
 | `worker_configuration` | Configuración efectiva no secreta registrada por cada etapa |
-| `people` | ID, nombre único con colación SQLite `NOCASE`, creación |
+| `people` | ID, nombre único con colación SQLite `NOCASE`, creación y destino de fusión opcional |
 | `video_person_observations` | Clave `(video_id, analysis_revision, observation_index)`, descripción/segundo observados, persona, confirmación y fecha opcional de revisión; conserva identidades anteriores sin asignarlas a otra ficha |
+| `person_merge_history` | Historial de fusiones de catálogo, destino, estado y tiempos; conserva origen archivado para permitir deshacer |
+| `person_merge_observations` | Observaciones movidas por fusión, para restaurarlas si siguen asignadas al destino |
 | `video_fts` | FTS5 sobre ruta, título, resumen y texto visual agregado; contenido externo en `videos`, sincronizado con triggers |
 
 Los campos JSON almacenan candidatos de fecha, resumen técnico, personas observadas, eventos, lugares, palabras clave, pistas de fecha, uso y nombres generales confirmados. La API conserva los campos JSON originales y agrega versiones parseadas.

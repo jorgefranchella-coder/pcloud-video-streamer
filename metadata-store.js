@@ -246,6 +246,29 @@ db.exec(`
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
 `);
+const personColumns = new Set(db.prepare('PRAGMA table_info(people)').all().map(column => column.name));
+if (!personColumns.has('merged_into')) {
+  db.exec('ALTER TABLE people ADD COLUMN merged_into INTEGER REFERENCES people(id)');
+}
+db.exec(`
+  CREATE TABLE IF NOT EXISTS person_merge_history (
+    id INTEGER PRIMARY KEY,
+    source_person_id INTEGER NOT NULL REFERENCES people(id),
+    target_person_id INTEGER NOT NULL REFERENCES people(id),
+    source_name TEXT NOT NULL,
+    target_name TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'undone')),
+    merged_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    undone_at TEXT
+  );
+  CREATE TABLE IF NOT EXISTS person_merge_observations (
+    merge_id INTEGER NOT NULL REFERENCES person_merge_history(id) ON DELETE CASCADE,
+    video_id INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+    analysis_revision TEXT NOT NULL,
+    observation_index INTEGER NOT NULL,
+    PRIMARY KEY (merge_id, video_id, analysis_revision, observation_index)
+  );
+`);
 
 db.prepare(`UPDATE videos SET visual_revision = 'legacy:' || id || ':' || fingerprint
   WHERE visual_status = 'done' AND visual_revision IS NULL`).run();
@@ -518,6 +541,7 @@ function listPeople() {
     FROM people LEFT JOIN video_person_observations ON people.id = video_person_observations.person_id
       AND video_person_observations.analysis_revision = (SELECT visual_revision FROM videos WHERE id = video_person_observations.video_id)
       AND (SELECT status FROM videos WHERE id = video_person_observations.video_id) != 'missing'
+    WHERE people.merged_into IS NULL
     GROUP BY people.id ORDER BY people.name COLLATE NOCASE`).all();
 }
 
@@ -528,8 +552,8 @@ function renamePerson(personId, newName) {
   const name = newName.trim().replace(/\s+/g, ' ');
   if (!name || name.length > 80) throw new Error('El nombre debe tener entre 1 y 80 caracteres');
   const rename = db.transaction(() => {
-    const existing = db.prepare('SELECT id, name FROM people WHERE id = ?').get(personId);
-    if (!existing) return null;
+    const existing = db.prepare('SELECT id, name, merged_into FROM people WHERE id = ?').get(personId);
+    if (!existing || existing.merged_into != null) return null;
     const duplicate = db.prepare('SELECT id FROM people WHERE name = ? COLLATE NOCASE AND id != ?').get(name, personId);
     if (duplicate) throw new Error('Ya existe una persona con ese nombre');
     db.prepare('UPDATE people SET name = ? WHERE id = ?').run(name, personId);
@@ -553,6 +577,98 @@ function renamePerson(personId, newName) {
     return db.prepare('SELECT id, name FROM people WHERE id = ?').get(personId);
   });
   return rename.immediate();
+}
+
+function refreshSearchTextForVideos(videoIds) {
+  const uniqueIds = [...new Set(videoIds)];
+  for (const videoId of uniqueIds) {
+    const row = getById.get(videoId);
+    if (!row || row.status === 'missing' || row.visual_status !== 'done') continue;
+    const assignedNames = db.prepare(`SELECT people.name FROM video_person_observations
+      JOIN people ON people.id = video_person_observations.person_id
+      WHERE video_id = ? AND analysis_revision = ?`).all(row.id, row.visual_revision).map(item => item.name);
+    const searchText = buildVisualSearchText({
+      events: JSON.parse(row.visual_events_json), people: JSON.parse(row.visual_people_json),
+      places: JSON.parse(row.visual_places_json), keywords: JSON.parse(row.visual_keywords_json),
+      dateClues: JSON.parse(row.visual_date_clues_json),
+      confirmedPeople: [...JSON.parse(row.confirmed_people_json), ...assignedNames]
+    });
+    db.prepare('UPDATE videos SET visual_search_text = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+      .run(searchText, row.id);
+  }
+}
+
+function mergePeople(sourcePersonId, targetPersonId) {
+  if (!Number.isSafeInteger(sourcePersonId) || sourcePersonId < 1 ||
+      !Number.isSafeInteger(targetPersonId) || targetPersonId < 1 || sourcePersonId === targetPersonId) {
+    throw new Error('IDs de personas inválidos');
+  }
+  const merge = db.transaction(() => {
+    const source = db.prepare('SELECT id, name, merged_into FROM people WHERE id = ?').get(sourcePersonId);
+    const target = db.prepare('SELECT id, name, merged_into FROM people WHERE id = ?').get(targetPersonId);
+    if (!source || !target || source.merged_into != null || target.merged_into != null) return null;
+    const activeMerge = db.prepare(`SELECT id FROM person_merge_history WHERE status = 'active'
+      AND (source_person_id IN (?, ?) OR target_person_id IN (?, ?)) LIMIT 1`)
+      .get(sourcePersonId, targetPersonId, sourcePersonId, targetPersonId);
+    if (activeMerge) throw new Error('Deshacé primero la fusión activa antes de volver a combinar estas personas');
+    const insertMerge = db.prepare(`INSERT INTO person_merge_history
+      (source_person_id, target_person_id, source_name, target_name) VALUES (?, ?, ?, ?)`)
+      .run(sourcePersonId, targetPersonId, source.name, target.name);
+    const mergeId = Number(insertMerge.lastInsertRowid);
+    const observations = db.prepare(`SELECT video_id, analysis_revision, observation_index
+      FROM video_person_observations WHERE person_id = ?`).all(sourcePersonId);
+    const saveObservation = db.prepare(`INSERT INTO person_merge_observations
+      (merge_id, video_id, analysis_revision, observation_index) VALUES (?, ?, ?, ?)`);
+    for (const observation of observations) {
+      saveObservation.run(mergeId, observation.video_id, observation.analysis_revision, observation.observation_index);
+    }
+    db.prepare('UPDATE video_person_observations SET person_id = ? WHERE person_id = ?')
+      .run(targetPersonId, sourcePersonId);
+    db.prepare('UPDATE people SET merged_into = ? WHERE id = ?').run(targetPersonId, sourcePersonId);
+    refreshSearchTextForVideos(observations.map(item => item.video_id));
+    return { id: mergeId, source_person_id: sourcePersonId, target_person_id: targetPersonId,
+      source_name: source.name, target_name: target.name, status: 'active',
+      moved_observations: observations.length };
+  });
+  return merge.immediate();
+}
+
+function undoPeopleMerge(mergeId) {
+  if (!Number.isSafeInteger(mergeId) || mergeId < 1) throw new Error('ID de fusión inválido');
+  const undo = db.transaction(() => {
+    const merge = db.prepare(`SELECT * FROM person_merge_history WHERE id = ? AND status = 'active'`).get(mergeId);
+    if (!merge) return null;
+    const source = db.prepare('SELECT merged_into FROM people WHERE id = ?').get(merge.source_person_id);
+    const target = db.prepare('SELECT merged_into FROM people WHERE id = ?').get(merge.target_person_id);
+    if (!source || source.merged_into !== merge.target_person_id || !target || target.merged_into != null) {
+      throw new Error('No se puede deshacer: cambió el estado de alguna persona');
+    }
+    const observations = db.prepare(`SELECT video_id, analysis_revision, observation_index
+      FROM person_merge_observations WHERE merge_id = ?`).all(mergeId);
+    const restore = db.prepare(`UPDATE video_person_observations SET person_id = ?
+      WHERE video_id = ? AND analysis_revision = ? AND observation_index = ? AND person_id = ?`);
+    const affectedVideos = [];
+    let restored = 0;
+    for (const observation of observations) {
+      const result = restore.run(merge.source_person_id, observation.video_id,
+        observation.analysis_revision, observation.observation_index, merge.target_person_id);
+      if (result.changes) {
+        restored += result.changes;
+        affectedVideos.push(observation.video_id);
+      }
+    }
+    db.prepare('UPDATE people SET merged_into = NULL WHERE id = ?').run(merge.source_person_id);
+    db.prepare("UPDATE person_merge_history SET status = 'undone', undone_at = CURRENT_TIMESTAMP WHERE id = ?").run(mergeId);
+    refreshSearchTextForVideos(affectedVideos);
+    return { id: mergeId, source_person_id: merge.source_person_id,
+      target_person_id: merge.target_person_id, status: 'undone', restored_observations: restored };
+  });
+  return undo.immediate();
+}
+
+function listPersonMerges() {
+  return db.prepare(`SELECT id, source_person_id, target_person_id, source_name, target_name,
+      status, merged_at, undone_at FROM person_merge_history ORDER BY id DESC LIMIT 50`).all();
 }
 
 function identifiedPeopleForVideo(videoId) {
@@ -591,8 +707,8 @@ function setVideoPerson({ relativePath, observationIndex, personId, personName, 
       db.prepare('DELETE FROM video_person_observations WHERE video_id = ? AND analysis_revision = ? AND observation_index = ?')
         .run(row.id, row.visual_revision, observationIndex);
     } else {
-      const person = db.prepare('SELECT id FROM people WHERE id = ?').get(personId);
-      if (!person) throw new Error('Persona desconocida');
+      const person = db.prepare('SELECT id, merged_into FROM people WHERE id = ?').get(personId);
+      if (!person || person.merged_into != null) throw new Error('Persona desconocida');
       db.prepare(`INSERT INTO video_person_observations
         (video_id, analysis_revision, observation_index, observation_description, at_seconds, person_id)
         VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(video_id, analysis_revision, observation_index) DO UPDATE SET
@@ -630,6 +746,7 @@ function setVideoPerson({ relativePath, observationIndex, personId, personName, 
 module.exports = {
   db, getByPath, getById, upsert, parseVideo, status, search, buildVisualSearchText,
   setConfirmedPeople, listPeople, identifiedPeopleForVideo, staleIdentificationsForVideo,
-  setVideoPerson, renamePerson, withJobLock, setWorkerConfiguration, setWorkerActivity, reserveVisualDailyRequest,
+  setVideoPerson, renamePerson, mergePeople, undoPeopleMerge, listPersonMerges,
+  withJobLock, setWorkerConfiguration, setWorkerActivity, reserveVisualDailyRequest,
   getVisualProviderControl, setVisualProviderControl, clearVisualProviderControl
 };

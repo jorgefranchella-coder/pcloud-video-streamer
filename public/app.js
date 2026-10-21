@@ -66,6 +66,7 @@ let playbackRequestId = 0;
 let selectedPersonId = null;
 let editToken = null;
 let knownPeople = [];
+let knownPersonMerges = [];
 let canEditPeopleDirectory = false;
 let searchTimer;
 let searchRequestId = 0;
@@ -712,6 +713,7 @@ async function openPeopleDirectory() {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
     knownPeople = data.items || [];
+    knownPersonMerges = data.merges || [];
     canEditPeopleDirectory = Boolean(data.can_edit_people);
     renderPeopleDirectory();
     peopleDialog.showModal();
@@ -727,7 +729,6 @@ function renderPeopleDirectory() {
     empty.className = 'p-4 text-sm text-gray-400';
     empty.textContent = 'Todavía no hay personas identificadas. Asigná un nombre a una aparición desde la ficha de un video.';
     peopleDirectory.appendChild(empty);
-    return;
   }
   for (const person of knownPeople) {
     const row = document.createElement('div');
@@ -761,9 +762,19 @@ function renderPeopleDirectory() {
       rename.setAttribute('aria-label', `Renombrar a ${person.name}`);
       rename.addEventListener('click', () => renameDirectoryPerson(person));
       row.appendChild(rename);
+      if (knownPeople.length > 1) {
+        const merge = document.createElement('button');
+        merge.type = 'button';
+        merge.className = 'shrink-0 rounded border border-amber-800 px-2 py-1 text-xs text-amber-200 hover:bg-amber-900';
+        merge.textContent = 'Combinar';
+        merge.setAttribute('aria-label', `Combinar ${person.name} con otra persona`);
+        merge.addEventListener('click', () => mergeDirectoryPerson(person));
+        row.appendChild(merge);
+      }
     }
     peopleDirectory.appendChild(row);
   }
+  renderPersonMergeHistory();
 }
 
 async function renameDirectoryPerson(person) {
@@ -781,6 +792,7 @@ async function renameDirectoryPerson(person) {
     const result = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
     knownPeople = result.items || knownPeople;
+    knownPersonMerges = result.merges || knownPersonMerges;
     if (selectedPersonId === person.id) {
       const canonicalName = knownPeople.find(item => item.id === person.id)?.name || name.trim();
       searchInput.value = canonicalName;
@@ -790,6 +802,91 @@ async function renameDirectoryPerson(person) {
     renderPeopleDirectory();
   } catch (error) {
     window.alert(`No se pudo renombrar la persona: ${error.message}`);
+  }
+}
+
+async function mergeDirectoryPerson(source) {
+  const targets = knownPeople.filter(person => person.id !== source.id);
+  const choices = targets.map(person => `${person.id}: ${person.name}`).join('\n');
+  const rawTargetId = window.prompt(`Combiná “${source.name}” dentro de esta persona. Escribí el ID destino:\n${choices}`);
+  if (rawTargetId == null) return;
+  const targetId = Number(rawTargetId.trim());
+  const target = targets.find(person => person.id === targetId);
+  if (!target) {
+    window.alert('Ese ID no corresponde a otra persona del catálogo.');
+    return;
+  }
+  if (!window.confirm(`Mover las asignaciones de “${source.name}” a “${target.name}”. Se guardará la fusión y se podrá deshacer desde este directorio. ¿Continuar?`)) return;
+  const token = tokenForEditing();
+  if (!token) return;
+  try {
+    const response = await fetch(`${API_BASE}/api/people/${source.id}/merge`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ target_person_id: target.id })
+    });
+    if (response.status === 401) editToken = null;
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    knownPeople = result.items || knownPeople;
+    knownPersonMerges = result.merges || knownPersonMerges;
+    if (selectedPersonId === source.id) {
+      selectedPersonId = target.id;
+      searchInput.value = target.name;
+      mobileSearchInput.value = target.name;
+      updateSearch();
+    }
+    renderPeopleDirectory();
+  } catch (error) {
+    window.alert(`No se pudo combinar las personas: ${error.message}`);
+  }
+}
+
+function renderPersonMergeHistory() {
+  if (!knownPersonMerges.length) return;
+  const section = document.createElement('section');
+  section.className = 'mt-4 border-t border-gray-700 pt-3';
+  const heading = document.createElement('h3');
+  heading.className = 'mb-2 text-sm font-semibold';
+  heading.textContent = 'Historial de fusiones';
+  section.appendChild(heading);
+  for (const merge of knownPersonMerges) {
+    const row = document.createElement('div');
+    row.className = 'mb-2 flex items-center justify-between gap-2 rounded bg-gray-900/60 p-2 text-xs';
+    const description = document.createElement('span');
+    description.textContent = `${merge.source_name} → ${merge.target_name} · ${merge.status === 'active' ? 'activa' : 'deshecha'}`;
+    row.appendChild(description);
+    if (canEditPeopleDirectory && merge.status === 'active') {
+      const undo = document.createElement('button');
+      undo.type = 'button';
+      undo.className = 'shrink-0 rounded border border-gray-600 px-2 py-1 hover:bg-gray-700';
+      undo.textContent = 'Deshacer';
+      undo.addEventListener('click', () => undoDirectoryMerge(merge));
+      row.appendChild(undo);
+    }
+    section.appendChild(row);
+  }
+  peopleDirectory.appendChild(section);
+}
+
+async function undoDirectoryMerge(merge) {
+  if (!window.confirm(`Deshacer la fusión de “${merge.source_name}” en “${merge.target_name}”? Las asignaciones que se hayan cambiado después se conservarán.`)) return;
+  const token = tokenForEditing();
+  if (!token) return;
+  try {
+    const response = await fetch(`${API_BASE}/api/people/merges/${merge.id}/undo`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if (response.status === 401) editToken = null;
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    knownPeople = result.items || knownPeople;
+    knownPersonMerges = result.merges || knownPersonMerges;
+    if (selectedPersonId === merge.target_person_id) updateSearch();
+    renderPeopleDirectory();
+  } catch (error) {
+    window.alert(`No se pudo deshacer la fusión: ${error.message}`);
   }
 }
 

@@ -25,10 +25,12 @@ Errores comunes de edición: `503` si no se configuró el token, `401` si no coi
 | `GET /api/search` | `q`, `from`, `to`, `person_id`, `folder`, `limit`, `offset` |
 | `GET /api/people` | Catálogo de nombres y cantidades |
 | `PATCH /api/people/:id` | `{ "name": "..." }`; renombra con `METADATA_EDIT_TOKEN` y actualiza la búsqueda |
+| `PATCH /api/people/:id/merge` | `{ "target_person_id": 7 }`; fusiona en el destino, con `METADATA_EDIT_TOKEN` |
+| `POST /api/people/merges/:id/undo` | Deshace una fusión activa; requiere `METADATA_EDIT_TOKEN` |
 | `PUT /api/metadata/person` | Asociación de una observación con un nombre |
 | `PATCH /api/metadata/people` | Lista general de nombres de compatibilidad |
 
-No existen endpoints para iniciar, pausar o cancelar análisis, fusionar personas, editar fechas ni regenerar fichas desde la web. El catálogo permite renombrar personas con `METADATA_EDIT_TOKEN`.
+No existen endpoints para iniciar, pausar o cancelar análisis, editar fechas ni regenerar fichas desde la web. El catálogo permite renombrar, fusionar y deshacer fusiones con `METADATA_EDIT_TOKEN`.
 
 ## Directorios y reproducción
 
@@ -159,11 +161,14 @@ Respuesta `{ "items": [...], "limit": 50, "offset": 0 }`. Cada item incluye ID, 
   "items": [
     { "id": 7, "name": "Jorge", "appearances": 2, "videos": 1 }
   ],
+  "merges": [],
   "can_edit_people": true
 }
 ```
 
 `PATCH /api/people/:id` requiere `Authorization: Bearer <METADATA_EDIT_TOKEN>` y recibe `{ "name": "Nombre actualizado" }`. Actualiza el nombre del catálogo y reconstruye el texto de búsqueda de los videos con asociaciones vigentes. Devuelve `409` si otro registro ya usa ese nombre y `404` si la persona no existe.
+
+`PATCH /api/people/:id/merge` recibe `{ "target_person_id": 7 }`. Mantiene el ID destino, mueve las asociaciones actuales e históricas, y archiva el ID origen. Cada fusión guarda las observaciones movidas y aparece en `merges`, las últimas 50 operaciones del historial. `POST /api/people/merges/:id/undo` restaura las asignaciones que aún apuntan al destino; las reasignaciones posteriores se conservan. Para evitar fusiones encadenadas difíciles de revertir, una persona involucrada en otra fusión activa debe deshacerse primero. IDs inválidos devuelven `400`, fusión conflictiva `409` y fusión inexistente `404`.
 
 `appearances` cuenta asociaciones activas de la revisión vigente, no personas detectadas de forma independiente. Dos observaciones del mismo individuo en un video cuentan como dos apariciones y un video. El catálogo puede incluir nombres sin asociaciones; los videos `missing` no suman al conteo.
 
