@@ -6,7 +6,7 @@
 
 Usar Node.js 22+, npm y ffmpeg/ffprobe. Para montar pCloud se necesitan rclone, FUSE y las credenciales configuradas por el administrador. systemd es opcional para ejecución local; Docker es una alternativa al proceso web instalado en el host.
 
-Los tres procesos deben compartir exactamente `VIDEO_ROOT` y `DATA_DIR`. La base vive en disco local persistente. Por defecto, `DATA_DIR` es `data` junto a `metadata-store.js`, no necesariamente el directorio desde el que se invocó Node. Ejecutar el servidor desde la raíz del proyecto: `express.static('public')` sí depende del directorio de trabajo.
+Los tres procesos deben compartir exactamente `VIDEO_ROOT` y `DATA_DIR`. La base vive en disco local persistente. Por defecto, `DATA_DIR` es `data` junto a `metadata-store.js`, no necesariamente el directorio desde el que se invocó Node. Los archivos estáticos se resuelven desde el directorio del proyecto.
 
 El proyecto no carga archivos `.env` automáticamente. Para una ejecución manual hay que exportar variables en la terminal, usar mecanismos de entorno de Node compatibles o inyectarlas desde el gestor de procesos. Un archivo en `/etc` solo afecta al servicio que lo declara en `EnvironmentFile`.
 
@@ -16,20 +16,28 @@ El proyecto no carga archivos `.env` automáticamente. Para una ejecución manua
 |---|---|---|
 | `VIDEO_ROOT` | `/mnt/pcloud/My Videos` | Los tres; raíz de archivos |
 | `DATA_DIR` | `data/` junto al módulo | Los tres; directorio SQLite |
-| `PORT` | `3000` | Web; la unidad incluida usa `3001` |
-| `METADATA_EDIT_TOKEN` | Sin definir | Web; habilita edición de nombres |
+| `PORT` | `3000` | Web; entero entre 1 y 65535; la unidad incluida usa `3001` |
+| `METADATA_EDIT_TOKEN` | Sin definir | Web; habilita edición de nombres; mínimo 32 bytes |
+| `ACCESS_TOKEN` | Sin definir | Web; protege API y reproducción con sesión por cookie. Sin definir, el acceso de red sigue abierto |
+| `ACCESS_COOKIE_SECURE` | Desactivado | Web; `1` agrega `Secure` a la cookie, necesario detrás de HTTPS |
+| `ACCESS_COOKIE_SAMESITE` | `Strict` | Web; `Strict`, `Lax` o `None`; `None` requiere `ACCESS_COOKIE_SECURE=1` |
+| `CORS_ORIGINS` | Vacío | Web; lista separada por comas de orígenes HTTP(S) exactos autorizados para llamadas cross-origin |
 | `INDEX_MODE` | Sin definir | Indexador; `inventory` evita ffprobe |
 | `PROBE_TIMEOUT_MS` | `30000` | Indexador; timeout por ffprobe |
 | `MAX_PROBES` | `50` | Indexador; intentos por recorrido; `0` sin límite |
 | `RETRY_FAILED` | Desactivado | Indexador; exactamente `1` reintenta fallos técnicos |
 | `OPENROUTER_API_KEY` | Sin definir | Visual; obligatoria |
 | `OPENROUTER_MODEL` | `openrouter/free` | Visual; selector de modelo/router |
-| `OPENROUTER_API_URL` | `https://openrouter.ai/api/v1/chat/completions` | Visual; endpoint de inferencia |
+| `OPENROUTER_API_URL` | `https://openrouter.ai/api/v1/chat/completions` | Visual; endpoint de inferencia, exige HTTPS y no sigue redirecciones |
 | `MAX_VISUAL` | `1` | Visual; lote entre 1 y 100; `0` no significa ilimitado |
-| `RETRY_VISUAL_FAILED` | Desactivado | Visual; exactamente `1` incluye fallidos |
+| `MAX_VISUAL_ATTEMPTS` | `5` | Visual; intentos automáticos máximos por fingerprint, entre 1 y 20 |
+| `MAX_VISUAL_REQUESTS_PER_DAY` | `0` | Visual; solicitudes iniciadas por día UTC; `0` desactiva el límite |
+| `RETRY_VISUAL_FAILED` | Desactivado | Visual; exactamente `1` incluye fallos transitorios cuyo tiempo de espera ya venció |
 | `VISUAL_VIDEO_ID` | Sin definir | Visual; ID positivo selecciona un solo video técnicamente listo, incluso si ya tiene ficha |
 
-La unidad visual del repositorio declara `MAX_VISUAL=5` y `RETRY_VISUAL_FAILED=1`. El archivo de entorno de systemd puede sobrescribir esas variables. En el último arranque observado se intentó un único video: revisar límites y selector puntual antes de asumir que se procesarán cinco. El contenido del archivo de secretos no se inspeccionó para este documento.
+Validación al iniciar: `PROBE_TIMEOUT_MS` debe estar entre 1.000 y 600.000; `MAX_PROBES` entre 0 y 1.000.000 (0 significa sin límite); `MAX_VISUAL` entre 1 y 100; `MAX_VISUAL_ATTEMPTS` entre 1 y 20; `MAX_VISUAL_REQUESTS_PER_DAY` entre 0 y 5.000 (0 significa sin límite); `VISUAL_VIDEO_ID`, si se define, debe ser un entero positivo; los flags `RETRY_*` aceptan solo `0` o `1`. Un valor inválido detiene ese trabajador con un error explícito. Los errores de autenticación y las respuestas 4xx no se reintentan automáticamente; 429, 5xx y fallos transitorios esperan antes del próximo intento, con un máximo automático por versión del video.
+
+La unidad visual del repositorio declara `MAX_VISUAL=5` y `RETRY_VISUAL_FAILED=1`. El archivo de entorno de systemd puede sobrescribir esas variables. Cada trabajador registra en SQLite los límites/modelo no secretos usados al arrancar. La interfaz muestra la última configuración registrada por cada etapa; no lee ni revela las claves del proveedor. También muestra el último lote y conserva hasta 200 ejecuciones recientes de cada etapa.
 
 Los límites de cuota, precios y disponibilidad de los proveedores no están codificados como garantías del proyecto. Consultarlos en la cuenta del proveedor antes de ampliar el procesamiento. No hay control de presupuesto propio.
 
@@ -80,10 +88,11 @@ Crear `/etc/pcloud-video-visual.env` con `sudoedit`. Ejemplo de contenido; reemp
 OPENROUTER_API_KEY=REEMPLAZAR_POR_LA_CLAVE
 OPENROUTER_MODEL=openrouter/free
 MAX_VISUAL=5
+MAX_VISUAL_REQUESTS_PER_DAY=30
 RETRY_VISUAL_FAILED=0
 ```
 
-Este ejemplo elige cinco por lote y no reintenta fallidos automáticamente. Omitir `VISUAL_VIDEO_ID` para procesar la cola; dejarlo fijado provoca que cada arranque vuelva al mismo video.
+Este ejemplo elige cinco por lote, limita a 30 las solicitudes iniciadas en un día UTC y no reintenta fallidos automáticamente. El contador persiste en SQLite y se muestra en la interfaz; las fichas restantes quedan pendientes para el próximo lote manual después de renovarse el límite. Omitir `VISUAL_VIDEO_ID` para procesar la cola; dejarlo fijado provoca que cada arranque vuelva al mismo video.
 
 Para editar identidades, crear `/etc/pcloud-video-metadata.env` con `sudoedit`:
 
@@ -91,11 +100,25 @@ Para editar identidades, crear `/etc/pcloud-video-metadata.env` con `sudoedit`:
 METADATA_EDIT_TOKEN=REEMPLAZAR_POR_UN_TOKEN_ALEATORIO
 ```
 
+Para restringir la biblioteca a personas con token, crear `/etc/pcloud-video-access.env`:
+
+```ini
+ACCESS_TOKEN=REEMPLAZAR_POR_UN_TOKEN_ALEATORIO_DE_32_BYTES_O_MAS
+ACCESS_COOKIE_SECURE=1
+ACCESS_COOKIE_SAMESITE=Strict
+# Solo si una aplicación web en otro origen necesita llamar a la API:
+# CORS_ORIGINS=https://mi-dominio.example
+```
+
+Generar el token, por ejemplo, con `openssl rand -hex 32`. El servidor entrega una sesión de 12 horas en una cookie `HttpOnly`; el token no se guarda en el navegador ni se agrega a las URLs. La interfaz lo solicita al ingresar y vuelve a pedirlo si una llamada API detecta que la sesión venció; reintenta esa llamada una vez. `ACCESS_COOKIE_SECURE=1` requiere HTTPS. Si el servicio se usa por HTTP local, omitirla y mantener `ACCESS_COOKIE_SAMESITE=Strict`. Para una aplicación en otro sitio que necesite enviar la cookie, configurar HTTPS, `ACCESS_COOKIE_SECURE=1` y `ACCESS_COOKIE_SAMESITE=None`; el navegador todavía puede bloquear cookies de terceros según sus políticas. Los orígenes CORS deben ser valores exactos como `https://app.example`, sin ruta ni barra final; por defecto se aceptan solicitudes same-origin y no se habilitan clientes cross-origin. La edición de identidades conserva además su token `METADATA_EDIT_TOKEN`.
+
+El servidor agrega una política CSP y cabeceras de seguridad para la interfaz y la API, y oculta la cabecera `X-Powered-By`. La política permite Tailwind desde su CDN y las fuentes de Google Fonts usadas por `public/index.html`; si se cambia el origen de esos recursos, actualizar también la CSP en `server.js`.
+
 Se puede generar un valor con `openssl rand -hex 32`. Son archivos distintos: la clave del proveedor no debe entregarse al navegador.
 
 ```bash
-sudo chmod 600 /etc/pcloud-video-visual.env /etc/pcloud-video-metadata.env
-sudo cp pcloud-video-streamer.service pcloud-video-indexer.service pcloud-video-indexer.timer pcloud-video-visual.service /etc/systemd/system/
+sudo chmod 600 /etc/pcloud-video-visual.env /etc/pcloud-video-metadata.env /etc/pcloud-video-access.env
+sudo cp pcloud-video-streamer.service pcloud-video-indexer.service pcloud-video-indexer.timer pcloud-video-visual.service pcloud-video-visual.timer /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now pcloud-video-streamer.service
 sudo systemctl enable --now pcloud-video-indexer.timer
@@ -110,10 +133,20 @@ El temporizador técnico puede activar una ejecución al habilitarlo si ya pasó
 | `pcloud-video-indexer.service` | `oneshot`; un recorrido y hasta 50 intentos técnicos con valores por defecto |
 | `pcloud-video-indexer.timer` | `OnBootSec=5min`, después `OnUnitInactiveSec=6h` |
 | `pcloud-video-visual.service` | `oneshot` manual; termina al finalizar el lote |
+| `pcloud-video-visual.timer` | Opcional; primer lote 15 min después del arranque, siguientes una hora después de terminar el lote anterior |
 
-El temporizador técnico es relativo, no un calendario de horas fijas. `Persistent=true` aparece en el archivo, pero no debe interpretarse como recuperación garantizada de todas las ejecuciones omitidas de este temporizador relativo. La etapa visual no se inicia automáticamente cuando termina la técnica.
+El temporizador técnico es relativo, no un calendario de horas fijas. `Persistent=true` aparece en el archivo, pero no debe interpretarse como recuperación garantizada de todas las ejecuciones omitidas de este temporizador relativo. La etapa visual no se inicia automáticamente cuando termina la técnica; el temporizador visual opcional continúa la cola en lotes separados.
 
-Cambiar código del servidor exige reiniciarlo. Los procesos de lote cargan el nuevo código en su próximo arranque. Los archivos estáticos se leen en las peticiones; recargar el navegador. Para cambios de unidades: copiar nuevamente, `daemon-reload` y reiniciar la unidad afectada. Cambiar solo el contenido de un `EnvironmentFile` requiere un nuevo arranque del proceso que lo consume.
+Para activar la continuación visual, primero definir `MAX_VISUAL_REQUESTS_PER_DAY` en `/etc/pcloud-video-visual.env` con el máximo diario que se desea permitir. Verificar que la clave, el modelo y el endpoint sean correctos; los cambios de configuración levantan una pausa permanente del proveedor, mientras que errores de cuota/red tienen espera automática. Luego habilitar el timer:
+
+```bash
+sudo systemctl enable --now pcloud-video-visual.timer
+systemctl list-timers pcloud-video-visual.timer
+```
+
+El timer no se habilita en la instalación inicial. Cada ejecución respeta `MAX_VISUAL`, el límite diario, los reintentos y el bloqueo común. Si se alcanza el límite diario, las fichas siguen pendientes; systemd las intentará en su siguiente intervalo, una vez renovado el contador UTC.
+
+Cambiar código del servidor exige reiniciarlo. Ante `SIGTERM` o `SIGINT`, el servidor deja de aceptar conexiones, permite hasta 25 segundos para terminar las solicitudes activas y luego cierra las conexiones restantes; finalmente cierra SQLite. Los procesos de lote cargan el nuevo código en su próximo arranque. Los archivos estáticos se leen en las peticiones; recargar el navegador. Para cambios de unidades: copiar nuevamente, `daemon-reload` y reiniciar la unidad afectada. Cambiar solo el contenido de un `EnvironmentFile` requiere un nuevo arranque del proceso que lo consume.
 
 ## Docker
 

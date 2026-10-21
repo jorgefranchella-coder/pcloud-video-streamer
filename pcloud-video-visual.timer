@@ -1,0 +1,10 @@
+[Unit]
+Description=Continue bounded pCloud visual analysis batches
+
+[Timer]
+OnBootSec=15min
+OnUnitInactiveSec=1h
+Unit=pcloud-video-visual.service
+
+[Install]
+WantedBy=timers.target

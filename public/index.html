@@ -36,10 +36,11 @@
           <label>Desde<input id="searchFrom" type="date" class="w-full mt-1 rounded bg-gray-900 border border-gray-600 text-white" /></label>
           <label>Hasta<input id="searchTo" type="date" class="w-full mt-1 rounded bg-gray-900 border border-gray-600 text-white" /></label>
         </div>
+        <label class="mt-2 flex items-center gap-2 text-xs text-gray-400"><input id="searchWithinFolder" type="checkbox" disabled />Buscar solo en esta carpeta</label>
         <button id="peopleDirectoryBtn" class="mt-3 w-full px-3 py-2 text-left text-sm rounded bg-gray-700 hover:bg-gray-600">Personas identificadas</button>
       </div>
       
-      <nav class="flex-1 p-3 folder-tree" id="folderTree" role="tree" aria-label="Estructura de carpetas">
+      <nav class="flex-1 p-3 folder-tree" id="folderTree" aria-label="Carpetas y videos">
         <div class="text-center text-gray-500 py-8" id="loadingTree">Cargando carpetas...</div>
       </nav>
       
@@ -51,7 +52,7 @@
     </aside>
 
     <!-- Mobile sidebar toggle -->
-    <button id="mobileMenuBtn" class="lg:hidden fixed top-4 left-4 z-50 p-2 bg-gray-800 rounded-lg border border-gray-700 shadow-lg">
+    <button id="mobileMenuBtn" type="button" class="lg:hidden fixed top-4 left-4 z-50 p-2 bg-gray-800 rounded-lg border border-gray-700 shadow-lg" aria-label="Abrir navegación" aria-controls="mobileSidebar" aria-expanded="false">
       <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
       </svg>
@@ -61,14 +62,14 @@
     <main class="main-content flex min-w-0 flex-1 flex-col lg:h-full">
       <header class="sticky top-0 z-20 shrink-0 p-4 pl-16 lg:pl-4 border-b border-gray-700 bg-gray-800">
         <div class="flex items-center justify-between">
-          <h2 id="videoTitle" class="text-lg font-medium truncate max-w-md">Selecciona un vídeo para reproducir</h2>
+          <h2 id="videoTitle" class="text-lg font-medium truncate max-w-md" aria-live="polite" aria-atomic="true">Selecciona un vídeo para reproducir</h2>
           <div class="flex items-center gap-2">
             <span id="videoInfo" class="text-sm text-gray-500 hidden"></span>
           </div>
         </div>
       </header>
 
-      <section id="processProgress" class="shrink-0 border-b border-gray-700 bg-gray-800 px-4 py-3" aria-label="Progreso de las fichas" aria-live="polite">
+      <section id="processProgress" class="shrink-0 border-b border-gray-700 bg-gray-800 px-4 py-3" aria-label="Progreso de las fichas">
         <div class="mx-auto max-w-5xl">
           <div class="mb-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
             <h3 class="text-sm font-semibold">Progreso de las fichas</h3>
@@ -96,6 +97,7 @@
               <p id="visualProgressDetail" class="mt-1 text-xs text-gray-500">Esperando datos</p>
             </div>
           </div>
+          <p id="effectiveConfiguration" class="mt-2 text-xs text-gray-500">Configuración efectiva: esperando datos</p>
           <p id="scanProgressStatus" class="mt-2 hidden text-xs text-amber-300"></p>
         </div>
       </section>
@@ -105,6 +107,7 @@
         <video 
           id="videoPlayer" 
           class="max-w-full max-h-full" 
+          aria-label="Reproductor de video"
           controls 
           playsinline
           crossorigin="anonymous"
@@ -116,23 +119,23 @@
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/>
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
           </svg>
-          <p class="text-lg">Navega por las carpetas y selecciona un vídeo</p>
+          <p id="emptyStateMessage" class="text-lg">Navega por las carpetas y selecciona un vídeo</p>
         </div>
         
         <!-- Loading state -->
-        <div id="loadingState" class="absolute inset-0 flex flex-col items-center justify-center text-blue-400 hidden">
+        <div id="loadingState" class="absolute inset-0 flex flex-col items-center justify-center text-blue-400 hidden" role="status" aria-live="polite">
           <svg class="animate-spin h-12 w-12" viewBox="0 0 24 24">
             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"/>
             <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/>
           </svg>
-          <p class="mt-3">Buffering...</p>
+          <p class="mt-3">Cargando video…</p>
         </div>
       </div>
 
       <section id="metadataPanel" class="hidden shrink-0 p-4 bg-gray-800 border-t border-gray-700" aria-label="Ficha del vídeo">
         <div class="flex items-center gap-3 mb-2">
           <h3 class="font-semibold">Ficha del vídeo</h3>
-          <span id="metadataStatus" class="text-xs text-gray-400"></span>
+          <span id="metadataStatus" class="text-xs text-gray-400" role="status" aria-live="polite"></span>
         </div>
         <dl class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1 text-sm">
           <div><dt class="inline text-gray-400">Duración: </dt><dd id="metadataDuration" class="inline"></dd></div>
@@ -163,11 +166,11 @@
     </main>
 
     <!-- Mobile sidebar overlay -->
-    <div id="sidebarOverlay" class="fixed inset-0 bg-black/50 z-40 lg:hidden hidden"></div>
-    <aside id="mobileSidebar" class="fixed inset-y-0 left-0 w-72 bg-gray-800 border-r border-gray-700 z-50 lg:hidden transform -translate-x-full transition-transform duration-300">
+    <div id="sidebarOverlay" class="fixed inset-0 bg-black/50 z-40 lg:hidden hidden" aria-hidden="true"></div>
+    <aside id="mobileSidebar" class="fixed inset-y-0 left-0 w-72 bg-gray-800 border-r border-gray-700 z-50 lg:hidden transform -translate-x-full transition-transform duration-300" aria-label="Navegación móvil" aria-hidden="true" inert>
       <div class="p-4 border-b border-gray-700 flex items-center justify-between">
         <h2 class="text-lg font-semibold">Mis Vídeos</h2>
-        <button id="closeSidebar" class="text-gray-400 hover:text-white">
+        <button id="closeSidebar" type="button" class="text-gray-400 hover:text-white" aria-label="Cerrar navegación">
           <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
           </svg>
@@ -179,19 +182,22 @@
           <label>Desde<input id="mobileSearchFrom" type="date" class="w-full mt-1 rounded bg-gray-900 border border-gray-600 text-white" /></label>
           <label>Hasta<input id="mobileSearchTo" type="date" class="w-full mt-1 rounded bg-gray-900 border border-gray-600 text-white" /></label>
         </div>
+        <label class="mt-2 flex items-center gap-2 text-xs text-gray-400"><input id="mobileSearchWithinFolder" type="checkbox" disabled />Buscar solo en esta carpeta</label>
         <button id="mobilePeopleDirectoryBtn" class="mt-3 w-full px-3 py-2 text-left text-sm rounded bg-gray-700 hover:bg-gray-600">Personas identificadas</button>
       </div>
-      <nav class="flex-1 p-3 folder-tree overflow-y-auto" id="mobileFolderTree" role="tree" aria-label="Estructura de carpetas"></nav>
+      <nav class="flex-1 p-3 folder-tree overflow-y-auto" id="mobileFolderTree" aria-label="Carpetas y videos"></nav>
     </aside>
   </div>
 
-  <dialog id="peopleDialog" class="w-[min(32rem,calc(100%-2rem))] rounded-xl border border-gray-700 bg-gray-800 p-0 text-gray-100 shadow-2xl backdrop:bg-black/70">
+  <p id="searchStatus" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
+
+  <dialog id="peopleDialog" aria-labelledby="peopleDialogTitle" aria-describedby="peopleDialogDescription" class="w-[min(32rem,calc(100%-2rem))] rounded-xl border border-gray-700 bg-gray-800 p-0 text-gray-100 shadow-2xl backdrop:bg-black/70">
     <div class="flex items-center justify-between border-b border-gray-700 p-4">
       <div>
-        <h2 class="font-semibold">Personas identificadas</h2>
-        <p class="text-xs text-gray-400 mt-1">Elegí un nombre para buscar sus apariciones.</p>
+        <h2 id="peopleDialogTitle" class="font-semibold">Personas identificadas</h2>
+        <p id="peopleDialogDescription" class="text-xs text-gray-400 mt-1">Elegí un nombre para buscar sus apariciones.</p>
       </div>
-      <button id="closePeopleDialog" class="rounded px-2 py-1 text-gray-400 hover:bg-gray-700 hover:text-white" aria-label="Cerrar">✕</button>
+      <button id="closePeopleDialog" type="button" class="rounded px-2 py-1 text-gray-400 hover:bg-gray-700 hover:text-white" aria-label="Cerrar">✕</button>
     </div>
     <div id="peopleDirectory" class="max-h-[60vh] overflow-y-auto p-3"></div>
   </dialog>

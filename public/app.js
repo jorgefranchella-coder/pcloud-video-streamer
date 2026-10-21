@@ -1,5 +1,6 @@
 // State
 let currentPath = '';
+let searchFolderPath = '';
 let pathHistory = [''];
 let historyIndex = 0;
 
@@ -10,6 +11,7 @@ const videoPlayer = document.getElementById('videoPlayer');
 const videoTitle = document.getElementById('videoTitle');
 const videoInfo = document.getElementById('videoInfo');
 const emptyState = document.getElementById('emptyState');
+const emptyStateMessage = document.getElementById('emptyStateMessage');
 const loadingState = document.getElementById('loadingState');
 const currentPathDisplay = document.getElementById('currentPathDisplay');
 const breadcrumbList = document.getElementById('breadcrumbList');
@@ -23,10 +25,13 @@ const playerContainer = document.getElementById('playerContainer');
 const sidebar = document.getElementById('sidebar');
 const searchInput = document.getElementById('searchInput');
 const mobileSearchInput = document.getElementById('mobileSearchInput');
+const searchStatus = document.getElementById('searchStatus');
 const searchFrom = document.getElementById('searchFrom');
 const searchTo = document.getElementById('searchTo');
+const searchWithinFolder = document.getElementById('searchWithinFolder');
 const mobileSearchFrom = document.getElementById('mobileSearchFrom');
 const mobileSearchTo = document.getElementById('mobileSearchTo');
+const mobileSearchWithinFolder = document.getElementById('mobileSearchWithinFolder');
 const metadataPanel = document.getElementById('metadataPanel');
 const metadataStatus = document.getElementById('metadataStatus');
 const metadataDuration = document.getElementById('metadataDuration');
@@ -56,18 +61,34 @@ const visualProgressLabel = document.getElementById('visualProgressLabel');
 const visualProgressDetail = document.getElementById('visualProgressDetail');
 const visualProgressBar = document.getElementById('visualProgressBar');
 const scanProgressStatus = document.getElementById('scanProgressStatus');
+const effectiveConfiguration = document.getElementById('effectiveConfiguration');
 let selectedVideoPath = null;
+let selectedMetadataRevision = null;
+let playbackRequestId = 0;
+let selectedPersonId = null;
 let editToken = null;
 let knownPeople = [];
+let knownPersonMerges = [];
+let canEditPeopleDirectory = false;
 let searchTimer;
 let searchRequestId = 0;
+let treeRequestId = 0;
+let accessRenewalPromise = null;
 const SEARCH_PAGE_SIZE = 50;
 
 // API Base URL
 const API_BASE = '';
 
 // Initialize
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+  if (!await establishAccessSession()) {
+    if (!folderTree.textContent) {
+      folderTree.textContent = 'Acceso requerido para consultar la biblioteca.';
+      mobileFolderTree.textContent = 'Acceso requerido para consultar la biblioteca.';
+    }
+    progressUpdated.textContent = 'Sesión no iniciada';
+    return;
+  }
   loadTree('');
   setupEventListeners();
   setupVideoEvents();
@@ -80,13 +101,57 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 });
 
+async function establishAccessSession() {
+  try {
+    const statusResponse = await fetch(`${API_BASE}/api/access/status`, { credentials: 'same-origin' });
+    if (!statusResponse.ok) throw new Error(`HTTP ${statusResponse.status}`);
+    const status = await statusResponse.json();
+    if (!status.required || status.authenticated) return true;
+
+    const token = window.prompt('Token de acceso a la biblioteca:');
+    if (!token) return false;
+    const response = await fetch(`${API_BASE}/api/access/session`, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token })
+    });
+    if (!response.ok) {
+      window.alert(response.status === 401 ? 'El token no es válido.' : `No se pudo iniciar sesión (HTTP ${response.status}).`);
+      return false;
+    }
+    return true;
+  } catch (error) {
+    const detail = error.message === 'HTTP 404'
+      ? 'El servidor no reconoce /api/access/status. Reiniciá pcloud-video-streamer.service y recargá la página.'
+      : `No se pudo verificar el acceso (${error.message}).`;
+    folderTree.textContent = detail;
+    mobileFolderTree.textContent = detail;
+    return false;
+  }
+}
+
+async function apiFetch(url, options = {}) {
+  const requestOptions = { credentials: 'same-origin', ...options };
+  const response = await fetch(url, requestOptions);
+  if (response.status !== 401) return response;
+
+  const result = await response.clone().json().catch(() => ({}));
+  if (result.error !== 'Authentication required') return response;
+  if (!accessRenewalPromise) {
+    accessRenewalPromise = establishAccessSession().finally(() => { accessRenewalPromise = null; });
+  }
+  if (!await accessRenewalPromise) return response;
+  return fetch(url, requestOptions);
+}
+
 let progressRequestInFlight = false;
 
 async function loadProcessProgress() {
   if (progressRequestInFlight) return;
   progressRequestInFlight = true;
   try {
-    const response = await fetch(`${API_BASE}/api/index/status`);
+    const response = await apiFetch(`${API_BASE}/api/index/status`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     renderProcessProgress(await response.json());
   } catch (error) {
@@ -109,6 +174,12 @@ function renderProcessProgress(status) {
   const totalVisual = Object.values(visual).reduce((sum, value) => sum + count(value), 0);
   const technicalDone = count(technical.done);
   const visualDone = count(visual.done);
+  const retryWait = status.visual_retry_wait || {};
+  const dailyBudget = status.visual_daily_budget || {};
+  const retryEnabled = status.worker_configuration?.visual?.retry_failed;
+  const retryAt = retryWait.next_at ? new Date(`${retryWait.next_at.replace(' ', 'T')}Z`) : null;
+  const retryTime = retryAt && !Number.isNaN(retryAt.getTime())
+    ? retryAt.toLocaleString('es-AR', { dateStyle: 'short', timeStyle: 'short' }) : '';
   const setProgress = (bar, label, done, total) => {
     const percent = total ? Math.round((done / total) * 1000) / 10 : 0;
     bar.setAttribute('aria-valuenow', String(percent));
@@ -127,8 +198,80 @@ function renderProcessProgress(status) {
     `${format(visual.pending)} en cola`,
     `${format(visual.running)} en proceso`,
     `${format(visual.failed)} con error`,
+    count(retryWait.ready_count) && retryEnabled ? `${format(retryWait.ready_count)} listos para reintento` : '',
+    count(retryWait.ready_count) && !retryEnabled ? `${format(retryWait.ready_count)} reintentos vencidos · activá RETRY_VISUAL_FAILED` : '',
+    count(retryWait.count) > count(retryWait.ready_count) ? `${format(count(retryWait.count) - count(retryWait.ready_count))} esperando reintento${retryTime ? ` · próximo ${retryTime}` : ''}` : '',
+    count(dailyBudget.limit) ? `Solicitudes del proveedor hoy: ${format(dailyBudget.requests)} / ${format(dailyBudget.limit)} UTC${count(dailyBudget.remaining) === 0 ? ' · límite alcanzado, se renueva a las 00:00 UTC' : ''}` : '',
     count(technical.pending) ? `${format(technical.pending)} esperando inventario técnico` : ''
   ].filter(Boolean).join(' · ');
+
+  const configured = status.worker_configuration || {};
+  const activity = status.worker_activity || {};
+  const visualWorker = activity['visual-analyzer'];
+  const providerControl = status.visual_provider_control || {};
+  if (visualWorker?.active) {
+    const current = visualWorker.current_path ? ` · ${visualWorker.current_path}` : '';
+    const phase = visualWorker.phase ? ` (${visualWorker.phase})` : '';
+    visualProgressDetail.textContent += ` · Procesando${current}${phase}`;
+  } else if (visualWorker?.stale) {
+    visualProgressDetail.textContent += ' · El último proceso visual se interrumpió; se recuperará al reiniciar el analizador.';
+  } else if (count(visual.running)) {
+    visualProgressDetail.textContent += ' · Hay fichas running, pero no se confirma un proceso visual activo.';
+  }
+  if (providerControl.paused) {
+    const until = providerControl.paused_until ? new Date(`${providerControl.paused_until.replace(' ', 'T')}Z`) : null;
+    const waitText = until && !Number.isNaN(until.getTime())
+      ? `hasta ${until.toLocaleString('es-AR', { dateStyle: 'short', timeStyle: 'short', timeZone: 'UTC' })} UTC`
+      : 'cambiar clave, modelo o endpoint para reactivar';
+    visualProgressDetail.textContent += ` · Proveedor pausado: ${providerControl.reason} · ${waitText}`;
+  }
+  const visualTimer = status.visual_timer || {};
+  if (visualTimer.load_state === 'not-found') {
+    visualProgressDetail.textContent += ' · Continuación automática desactivada: timer visual no instalado';
+  } else if (visualTimer.active) {
+    const next = visualTimer.next_run ? ` · próximo lote ${visualTimer.next_run}` : '';
+    visualProgressDetail.textContent += ` · Timer visual activo${next}`;
+  } else if (visualTimer.available) {
+    visualProgressDetail.textContent += visualTimer.enabled
+      ? ' · Timer visual habilitado, esperando próximo disparo'
+      : ' · Timer visual instalado pero deshabilitado';
+  }
+  const history = status.worker_history || {};
+  const describeLastRun = run => {
+    if (!run) return '';
+    const timestamp = run.finished_at || run.started_at;
+    const date = timestamp ? new Date(`${timestamp.replace(' ', 'T')}Z`) : null;
+    const time = date && !Number.isNaN(date.getTime())
+      ? date.toLocaleString('es-AR', { dateStyle: 'short', timeStyle: 'short' }) : '';
+    const state = run.status === 'done' ? 'completado' : run.status === 'failed' ? 'falló' : 'interrumpido';
+    const detail = (run.last_error || run.last_result || '').slice(0, 140);
+    return `Último lote ${state}${time ? ` · ${time}` : ''}${detail ? ` · ${detail}` : ''}`;
+  };
+  if (!activity.indexer?.active && history.indexer?.[0]) {
+    technicalProgressDetail.textContent += ` · ${describeLastRun(history.indexer[0])}`;
+  }
+  if (!visualWorker?.active && history['visual-analyzer']?.[0]) {
+    visualProgressDetail.textContent += ` · ${describeLastRun(history['visual-analyzer'][0])}`;
+  }
+  const settings = [];
+  if (configured.technical) {
+    const effective = configured.technical;
+    const batch = effective.max_probes === 0 ? 'sin límite' : `lote ${format(effective.max_probes)}`;
+    settings.push(effective.inventory_only
+      ? 'Técnico: solo inventario'
+      : `Técnico: ${batch}, timeout ${format(effective.probe_timeout_ms / 1000)} s, reintentos ${effective.retry_failed ? 'activos' : 'desactivados'}`);
+  }
+  if (configured.visual) {
+    const effective = configured.visual;
+    const target = effective.video_id ? ` · video puntual ${effective.video_id}` : '';
+    const requestLimit = effective.max_visual_requests_per_day
+      ? `, ${format(effective.max_visual_requests_per_day)} solicitudes/día UTC`
+      : ', solicitudes/día sin límite';
+    settings.push(`Visual: ${effective.model}, lote ${format(effective.max_visual)}, máximo ${format(effective.max_visual_attempts)} intentos${requestLimit}, reintentos ${effective.retry_failed ? 'activos' : 'desactivados'}${target}`);
+  }
+  effectiveConfiguration.textContent = settings.length
+    ? `Configuración efectiva de la última ejecución: ${settings.join(' · ')}`
+    : 'Configuración efectiva: se mostrará después de la primera ejecución de cada proceso.';
 
   const scan = status.last_scan;
   scanProgressStatus.classList.add('hidden');
@@ -142,7 +285,16 @@ function renderProcessProgress(status) {
       ? date.toLocaleString('es-AR', { dateStyle: 'medium', timeStyle: 'short' })
       : '';
     if (scan.status === 'running') {
-      scanProgressStatus.textContent = `Inventario en curso: ${format(scan.seen_count)} videos recorridos${formattedDate ? ` · iniciado ${formattedDate}` : ''}`;
+      const indexerWorker = activity.indexer;
+      if (indexerWorker?.stale) {
+        scanProgressStatus.textContent = `Inventario interrumpido: el proceso dejó de responder tras recorrer ${format(scan.seen_count)} videos. El próximo inicio lo reconciliará.`;
+      } else if (!indexerWorker?.active) {
+        scanProgressStatus.textContent = `El último inventario figura en curso tras ${format(scan.seen_count)} videos, pero no se confirma un indexador activo.`;
+      } else {
+        const current = indexerWorker?.current_path ? ` · ${indexerWorker.current_path}` : '';
+        const phase = indexerWorker?.phase ? ` (${indexerWorker.phase})` : '';
+        scanProgressStatus.textContent = `Inventario en curso: ${format(scan.seen_count)} videos recorridos${current}${phase}${formattedDate ? ` · iniciado ${formattedDate}` : ''}`;
+      }
       scanProgressStatus.classList.remove('hidden');
     } else if (scan.status === 'failed' || scan.status === 'interrupted') {
       let reason = '';
@@ -171,16 +323,24 @@ function setupEventListeners() {
   closePeopleDialog.addEventListener('click', () => peopleDialog.close());
   for (const input of [searchInput, mobileSearchInput]) {
     input.addEventListener('input', () => {
+      selectedPersonId = null;
       const other = input === searchInput ? mobileSearchInput : searchInput;
       other.value = input.value;
       clearTimeout(searchTimer);
       const requestId = ++searchRequestId;
       const value = input.value.trim();
-      if (!value && !searchFrom.value && !searchTo.value) {
+      if (!value && !searchFrom.value && !searchTo.value && !isScopedFolderSearch()) {
         loadTree(currentPath);
       } else {
+        treeRequestId++;
         searchTimer = setTimeout(() => searchVideos(value, 0, requestId), 250);
       }
+    });
+  }
+  for (const [checkbox, other] of [[searchWithinFolder, mobileSearchWithinFolder], [mobileSearchWithinFolder, searchWithinFolder]]) {
+    checkbox.addEventListener('change', () => {
+      other.checked = checkbox.checked;
+      updateSearch();
     });
   }
   for (const [input, other] of [[searchFrom, mobileSearchFrom], [searchTo, mobileSearchTo], [mobileSearchFrom, searchFrom], [mobileSearchTo, searchTo]]) {
@@ -197,7 +357,27 @@ function setupEventListeners() {
   
   // Keyboard navigation
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') closeMobileSidebar();
+    if (e.key === 'Escape') {
+      if (!peopleDialog.open) closeMobileSidebar();
+      return;
+    }
+    if (e.key !== 'Tab' || sidebarOverlay.classList.contains('hidden') || peopleDialog.open) return;
+    const focusable = [...mobileSidebar.querySelectorAll(
+      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    )].filter(element => element.getClientRects().length > 0);
+    if (!focusable.length) {
+      e.preventDefault();
+      return;
+    }
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (e.shiftKey && (document.activeElement === first || !mobileSidebar.contains(document.activeElement))) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && (document.activeElement === last || !mobileSidebar.contains(document.activeElement))) {
+      e.preventDefault();
+      first.focus();
+    }
   });
 }
 
@@ -205,31 +385,63 @@ function updateSearch() {
   clearTimeout(searchTimer);
   const requestId = ++searchRequestId;
   const query = searchInput.value.trim();
-  if (!query && !searchFrom.value && !searchTo.value) loadTree(currentPath);
+  if (!query && !searchFrom.value && !searchTo.value && !selectedPersonId && !isScopedFolderSearch()) loadTree(currentPath);
   else searchVideos(query, 0, requestId);
 }
 
-async function searchVideos(query, offset, requestId) {
+function isScopedFolderSearch() {
+  return Boolean(searchFolderPath && (searchWithinFolder.checked || mobileSearchWithinFolder.checked));
+}
+
+function setSearchFolderPath(path) {
+  searchFolderPath = path;
+  const canSearchFolder = Boolean(path);
+  searchWithinFolder.disabled = !canSearchFolder;
+  mobileSearchWithinFolder.disabled = !canSearchFolder;
+  if (!canSearchFolder) {
+    searchWithinFolder.checked = false;
+    mobileSearchWithinFolder.checked = false;
+  }
+}
+
+async function searchVideos(query, offset, requestId, folder = isScopedFolderSearch() ? searchFolderPath : null) {
+  if (offset === 0) treeRequestId++;
   try {
     const params = new URLSearchParams({ q: query, offset: String(offset), limit: String(SEARCH_PAGE_SIZE) });
     if (searchFrom.value) params.set('from', searchFrom.value);
     if (searchTo.value) params.set('to', searchTo.value);
-    const response = await fetch(`${API_BASE}/api/search?${params}`);
+    if (selectedPersonId) params.set('person_id', String(selectedPersonId));
+    if (folder) params.set('folder', folder);
+    const response = await apiFetch(`${API_BASE}/api/search?${params}`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
     if (requestId !== searchRequestId) return;
-    renderSearchResults(data.items, folderTree, query, offset, requestId);
-    renderSearchResults(data.items, mobileFolderTree, query, offset, requestId);
+    renderSearchResults(data.items, folderTree, query, offset, requestId, folder, data.has_more);
+    renderSearchResults(data.items, mobileFolderTree, query, offset, requestId, folder, data.has_more);
+    const loaded = offset + data.items.length;
+    searchStatus.textContent = loaded === 0
+      ? 'No se encontraron videos.'
+      : `${loaded} ${loaded === 1 ? 'video cargado' : 'videos cargados'}${data.has_more ? '. Hay más resultados disponibles.' : '.'}`;
     breadcrumbs.classList.add('hidden');
   } catch (error) {
     if (requestId === searchRequestId) {
-      folderTree.textContent = `Error al buscar: ${error.message}`;
-      mobileFolderTree.textContent = `Error al buscar: ${error.message}`;
+      if (offset === 0) {
+        folderTree.textContent = `Error al buscar: ${error.message}`;
+        mobileFolderTree.textContent = `Error al buscar: ${error.message}`;
+      } else {
+        document.querySelectorAll('.search-more button').forEach(button => {
+          button.dataset.loading = 'false';
+          button.setAttribute('aria-disabled', 'false');
+          button.textContent = 'Reintentar carga de resultados';
+        });
+      }
+      searchStatus.textContent = `No se pudo completar la búsqueda: ${error.message}`;
     }
   }
 }
 
-function renderSearchResults(items, container, query, offset, requestId) {
+function renderSearchResults(items, container, query, offset, requestId, folder, hasMore) {
+  const restoreFocus = offset > 0 && container.contains(document.activeElement);
   if (offset === 0) container.replaceChildren();
   container.querySelector('.search-more')?.remove();
   if (!items.length && offset === 0) {
@@ -251,24 +463,32 @@ function renderSearchResults(items, container, query, offset, requestId) {
     name.textContent = item.visual_title || item.relative_path.split('/').pop();
     const detail = document.createElement('span');
     detail.className = 'block truncate text-xs text-gray-400';
-    detail.textContent = `${item.recorded_at || 'Sin fecha'} · ${item.relative_path}${item.visual_summary ? ` · ${item.visual_summary}` : ''}`;
+    const matchTime = Number.isFinite(item.match_at_seconds)
+      ? ` · Momento: ${Math.floor(item.match_at_seconds / 60)}:${String(Math.floor(item.match_at_seconds % 60)).padStart(2, '0')}` : '';
+    detail.textContent = `${item.recorded_at || 'Sin fecha'} · ${item.relative_path}${matchTime}${item.snippet ? ` · Coincidencia: ${item.snippet}` : item.visual_summary ? ` · ${item.visual_summary}` : ''}`;
     button.append(name, detail);
-    button.addEventListener('click', () => playVideo(item.relative_path, name.textContent));
+    button.addEventListener('click', () => playVideo(item.relative_path, name.textContent, item.match_at_seconds));
     li.appendChild(button);
     list.appendChild(li);
   }
-  if (items.length === SEARCH_PAGE_SIZE) {
+  if (hasMore) {
     const more = document.createElement('li');
     more.className = 'search-more';
     const button = document.createElement('button');
     button.className = 'w-full px-3 py-2 text-left text-sm text-blue-300 hover:text-white';
     button.textContent = 'Ver más resultados';
     button.addEventListener('click', () => {
-      document.querySelectorAll('.search-more').forEach(element => element.remove());
-      searchVideos(query, offset + items.length, requestId);
+      if (button.dataset.loading === 'true') return;
+      button.dataset.loading = 'true';
+      button.setAttribute('aria-disabled', 'true');
+      button.textContent = 'Cargando más resultados…';
+      searchVideos(query, offset + items.length, requestId, folder);
     });
     more.appendChild(button);
     list.appendChild(more);
+    if (restoreFocus) button.focus();
+  } else if (restoreFocus) {
+    (list.children[offset]?.querySelector('button') || list.querySelector('li:not(.search-more) button'))?.focus();
   }
 }
 
@@ -283,12 +503,19 @@ function setupVideoEvents() {
   });
   
   videoPlayer.addEventListener('error', (e) => {
+    if (videoPlayer.error?.code === 1) return;
     loadingState.classList.add('hidden');
     emptyState.classList.remove('hidden');
     videoTitle.textContent = 'Error al cargar el vídeo';
     videoInfo.textContent = '';
     videoInfo.classList.add('hidden');
-    console.error('Video error:', e);
+    const messages = {
+      2: 'No se pudo leer el video. Revisá la conexión con pCloud y que el archivo siga disponible.',
+      3: 'El navegador no pudo decodificar este video. Puede estar dañado o usar un códec no compatible.',
+      4: 'El navegador no admite este formato o sus códecs. El servidor no convierte los videos.'
+    };
+    emptyStateMessage.textContent = messages[videoPlayer.error?.code] || 'No se pudo reproducir este video. Revisá el archivo, la conexión y los códecs admitidos por el navegador.';
+    console.error('Video error:', e, videoPlayer.error?.code);
   });
   
   videoPlayer.addEventListener('waiting', () => {
@@ -302,25 +529,33 @@ function setupVideoEvents() {
 
 // Load directory tree
 async function loadTree(path) {
+  clearTimeout(searchTimer);
+  searchRequestId++;
+  const requestId = ++treeRequestId;
+  searchStatus.textContent = '';
   currentPath = path;
+  setSearchFolderPath(path);
   currentPathDisplay.textContent = path === '' ? '/' : `/${path}`;
   
   folderTree.innerHTML = '<div class="text-center text-gray-500 py-8">Cargando...</div>';
   mobileFolderTree.innerHTML = '<div class="text-center text-gray-500 py-8">Cargando...</div>';
   
   try {
-    const response = await fetch(`${API_BASE}/api/list?path=${encodeURIComponent(path)}`);
+    const response = await apiFetch(`${API_BASE}/api/list?path=${encodeURIComponent(path)}`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
+    if (requestId !== treeRequestId || path !== currentPath) return;
     
     renderTree(data.items, folderTree);
     renderTree(data.items, mobileFolderTree);
     renderBreadcrumbs(path);
     breadcrumbs.classList.remove('hidden');
   } catch (err) {
+    if (requestId !== treeRequestId || path !== currentPath) return;
     console.error('Failed to load tree:', err);
-    folderTree.innerHTML = `<div class="text-center text-red-400 py-8">Error: ${err.message}</div>`;
-    mobileFolderTree.innerHTML = `<div class="text-center text-red-400 py-8">Error: ${err.message}</div>`;
+    folderTree.textContent = `Error: ${err.message}`;
+    mobileFolderTree.textContent = `Error: ${err.message}`;
+    searchStatus.textContent = `No se pudo cargar la biblioteca: ${err.message}`;
   }
 }
 
@@ -332,60 +567,10 @@ function renderTree(items, container) {
   
   const ul = document.createElement('ul');
   ul.className = 'space-y-1';
-  ul.setAttribute('role', 'group');
   
   items.forEach(item => {
     const li = document.createElement('li');
-    
-    if (item.type === 'folder') {
-      li.innerHTML = `
-        <button 
-          class="folder-btn w-full flex items-center gap-2 px-3 py-2 text-left rounded-lg hover:bg-gray-700 transition-colors text-sm"
-          data-path="${item.path}"
-          aria-expanded="false"
-        >
-          <svg class="w-5 h-5 text-yellow-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>
-          </svg>
-          <span class="truncate font-medium">${item.name}</span>
-          <svg class="w-4 h-4 text-gray-500 ml-auto folder-chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
-          </svg>
-        </button>
-      `;
-      const btn = li.querySelector('.folder-btn');
-      btn.addEventListener('click', () => {
-        const isExpanded = btn.getAttribute('aria-expanded') === 'true';
-        btn.setAttribute('aria-expanded', !isExpanded);
-        const chevron = btn.querySelector('.folder-chevron');
-        chevron.style.transform = isExpanded ? 'rotate(0deg)' : 'rotate(90deg)';
-        
-        // Load subfolder contents inline (lazy loading)
-        if (!isExpanded) {
-          loadSubfolder(item.path, li);
-        } else {
-          // Remove subfolder content
-          const subUl = li.querySelector('ul.subfolder');
-          if (subUl) subUl.remove();
-        }
-      });
-    } else {
-      li.innerHTML = `
-        <button 
-          class="video-btn w-full flex items-center gap-2 px-3 py-2 text-left rounded-lg hover:bg-gray-700 transition-colors text-sm"
-          data-path="${item.path}"
-        >
-          <svg class="w-5 h-5 text-green-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/>
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-          </svg>
-          <span class="truncate">${item.name}</span>
-        </button>
-      `;
-      const btn = li.querySelector('.video-btn');
-      btn.addEventListener('click', () => playVideo(item.path, item.name));
-    }
-    
+    li.appendChild(createTreeButton(item, li));
     ul.appendChild(li);
   });
   
@@ -393,110 +578,117 @@ function renderTree(items, container) {
   container.appendChild(ul);
 }
 
-async function loadSubfolder(folderPath, parentLi) {
+function createTreeButton(item, parentLi) {
+  const folder = item.type === 'folder';
+  const button = document.createElement('button');
+  button.className = `${folder ? 'folder-btn' : 'video-btn'} w-full flex items-center gap-2 px-3 py-2 text-left rounded-lg hover:bg-gray-700 transition-colors text-sm`;
+  button.dataset.path = item.path;
+  if (folder) {
+    button.setAttribute('aria-expanded', 'false');
+    button.innerHTML = '<svg class="w-5 h-5 text-yellow-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg><span class="truncate font-medium"></span><svg class="w-4 h-4 text-gray-500 ml-auto folder-chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>';
+    button.querySelector('span').textContent = item.name;
+    button.addEventListener('click', () => {
+      setSearchFolderPath(item.path);
+      const expanded = button.getAttribute('aria-expanded') === 'true';
+      button.setAttribute('aria-expanded', String(!expanded));
+      button.querySelector('.folder-chevron').style.transform = expanded ? 'rotate(0deg)' : 'rotate(90deg)';
+      button.subfolderRequestId = (button.subfolderRequestId || 0) + 1;
+      if (expanded) parentLi.querySelector('ul.subfolder')?.remove();
+      else loadSubfolder(item.path, parentLi, button, button.subfolderRequestId);
+    });
+  } else {
+    button.innerHTML = '<svg class="w-5 h-5 text-green-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg><span class="truncate"></span>';
+    button.querySelector('span').textContent = item.name;
+    button.addEventListener('click', () => playVideo(item.path, item.name));
+  }
+  return button;
+}
+
+async function loadSubfolder(folderPath, parentLi, folderButton, requestId) {
   try {
-    const response = await fetch(`${API_BASE}/api/list?path=${encodeURIComponent(folderPath)}`);
+    const response = await apiFetch(`${API_BASE}/api/list?path=${encodeURIComponent(folderPath)}`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
+    if (!parentLi.isConnected || folderButton.getAttribute('aria-expanded') !== 'true' ||
+        folderButton.subfolderRequestId !== requestId) return;
     
+    const subUl = document.createElement('ul');
+    subUl.className = 'subfolder ml-4 mt-1 space-y-1 border-l border-gray-700 pl-3';
     if (data.items.length > 0) {
-      const subUl = document.createElement('ul');
-      subUl.className = 'subfolder ml-4 mt-1 space-y-1 border-l border-gray-700 pl-3';
-      subUl.setAttribute('role', 'group');
-      
       data.items.forEach(item => {
         const li = document.createElement('li');
-        
-        if (item.type === 'folder') {
-          li.innerHTML = `
-            <button 
-              class="folder-btn w-full flex items-center gap-2 px-3 py-2 text-left rounded-lg hover:bg-gray-700 transition-colors text-sm"
-              data-path="${item.path}"
-              aria-expanded="false"
-            >
-              <svg class="w-5 h-5 text-yellow-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>
-              </svg>
-              <span class="truncate font-medium">${item.name}</span>
-              <svg class="w-4 h-4 text-gray-500 ml-auto folder-chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
-              </svg>
-            </button>
-          `;
-          const btn = li.querySelector('.folder-btn');
-          btn.addEventListener('click', () => {
-            const isExpanded = btn.getAttribute('aria-expanded') === 'true';
-            btn.setAttribute('aria-expanded', !isExpanded);
-            const chevron = btn.querySelector('.folder-chevron');
-            chevron.style.transform = isExpanded ? 'rotate(0deg)' : 'rotate(90deg)';
-            
-            if (!isExpanded) {
-              loadSubfolder(item.path, li);
-            } else {
-              const sub = li.querySelector('ul.subfolder');
-              if (sub) sub.remove();
-            }
-          });
-        } else {
-          li.innerHTML = `
-            <button 
-              class="video-btn w-full flex items-center gap-2 px-3 py-2 text-left rounded-lg hover:bg-gray-700 transition-colors text-sm"
-              data-path="${item.path}"
-            >
-              <svg class="w-5 h-5 text-green-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/>
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-              </svg>
-              <span class="truncate">${item.name}</span>
-            </button>
-          `;
-          const btn = li.querySelector('.video-btn');
-          btn.addEventListener('click', () => playVideo(item.path, item.name));
-        }
-        
+        li.appendChild(createTreeButton(item, li));
         subUl.appendChild(li);
       });
-      
+    } else {
+      const li = document.createElement('li');
+      li.className = 'px-3 py-2 text-sm text-gray-400';
+      li.textContent = 'Carpeta vacía';
+      subUl.appendChild(li);
+    }
+    parentLi.appendChild(subUl);
+  } catch (err) {
+    if (folderButton.subfolderRequestId === requestId && folderButton.getAttribute('aria-expanded') === 'true') {
+      console.error('Failed to load subfolder:', err);
+      const subUl = document.createElement('ul');
+      subUl.className = 'subfolder ml-4 mt-1 space-y-1 border-l border-gray-700 pl-3';
+      const li = document.createElement('li');
+      li.className = 'flex flex-wrap items-center gap-2 px-3 py-2 text-sm text-amber-200';
+      const message = document.createElement('span');
+      message.textContent = 'No se pudo cargar esta carpeta.';
+      const retry = document.createElement('button');
+      retry.type = 'button';
+      retry.className = 'rounded border border-gray-600 px-2 py-1 text-xs hover:bg-gray-700';
+      retry.textContent = 'Reintentar';
+      retry.addEventListener('click', () => {
+        const retryRequestId = ++folderButton.subfolderRequestId;
+        subUl.remove();
+        loadSubfolder(folderPath, parentLi, folderButton, retryRequestId);
+      });
+      li.append(message, retry);
+      subUl.appendChild(li);
       parentLi.appendChild(subUl);
     }
-  } catch (err) {
-    console.error('Failed to load subfolder:', err);
   }
 }
 
 function renderBreadcrumbs(path) {
-  breadcrumbList.innerHTML = '';
-  
-  // Root
+  breadcrumbList.replaceChildren();
+
   const rootLi = document.createElement('li');
-  rootLi.innerHTML = `
-    <button class="breadcrumb-btn hover:text-white transition-colors" data-path="">/</button>
-  `;
-  rootLi.querySelector('.breadcrumb-btn').addEventListener('click', () => loadTree(''));
+  const rootButton = document.createElement('button');
+  rootButton.className = 'breadcrumb-btn hover:text-white transition-colors';
+  rootButton.textContent = '/';
+  rootButton.addEventListener('click', () => loadTree(''));
+  rootLi.appendChild(rootButton);
   breadcrumbList.appendChild(rootLi);
-  
   if (path === '') return;
-  
+
   const parts = path.split('/');
   let accumulated = '';
-  
-  parts.forEach((part, index) => {
+  parts.forEach(part => {
     accumulated += (accumulated ? '/' : '') + part;
-    
+
     const separator = document.createElement('li');
-    separator.innerHTML = '<span class="text-gray-500 mx-1">/</span>';
+    const slash = document.createElement('span');
+    slash.className = 'text-gray-500 mx-1';
+    slash.textContent = '/';
+    separator.appendChild(slash);
     breadcrumbList.appendChild(separator);
-    
+
     const li = document.createElement('li');
-    li.innerHTML = `
-      <button class="breadcrumb-btn hover:text-white transition-colors" data-path="${accumulated}">${part}</button>
-    `;
-    li.querySelector('.breadcrumb-btn').addEventListener('click', () => loadTree(accumulated));
+    const button = document.createElement('button');
+    button.className = 'breadcrumb-btn hover:text-white transition-colors';
+    button.dataset.path = accumulated;
+    button.textContent = part;
+    button.addEventListener('click', () => loadTree(accumulated));
+    li.appendChild(button);
     breadcrumbList.appendChild(li);
   });
 }
 
-function playVideo(relativePath, name) {
+function playVideo(relativePath, name, seekToSeconds = null) {
+  const requestId = ++playbackRequestId;
   selectedVideoPath = relativePath;
   // Update UI
   videoTitle.textContent = name;
@@ -507,6 +699,11 @@ function playVideo(relativePath, name) {
   
   // Set video source
   const streamUrl = `${API_BASE}/api/stream?path=${encodeURIComponent(relativePath)}`;
+  if (Number.isFinite(seekToSeconds) && seekToSeconds >= 0) {
+    videoPlayer.addEventListener('loadedmetadata', () => {
+      if (requestId === playbackRequestId && selectedVideoPath === relativePath) videoPlayer.currentTime = seekToSeconds;
+    }, { once: true });
+  }
   videoPlayer.src = streamUrl;
   videoPlayer.load();
   videoPlayer.play().catch(err => {
@@ -529,6 +726,7 @@ function playVideo(relativePath, name) {
 
 async function loadMetadata(relativePath) {
   metadataPanel.classList.remove('hidden');
+  selectedMetadataRevision = null;
   metadataStatus.textContent = 'Cargando ficha...';
   metadataDuration.textContent = '';
   metadataResolution.textContent = '';
@@ -540,8 +738,8 @@ async function loadMetadata(relativePath) {
   visualMetadata.classList.add('hidden');
   try {
     const [response, peopleResponse] = await Promise.all([
-      fetch(`${API_BASE}/api/metadata?path=${encodeURIComponent(relativePath)}`),
-      fetch(`${API_BASE}/api/people`)
+      apiFetch(`${API_BASE}/api/metadata?path=${encodeURIComponent(relativePath)}`),
+      apiFetch(`${API_BASE}/api/people`)
     ]);
     if (selectedVideoPath !== relativePath) return;
     if (response.status === 404) {
@@ -552,6 +750,7 @@ async function loadMetadata(relativePath) {
     const item = await response.json();
     if (peopleResponse.ok) knownPeople = (await peopleResponse.json()).items || [];
     if (selectedVideoPath !== relativePath) return;
+    selectedMetadataRevision = item.visual_revision || null;
     metadataStatus.textContent = {
       pending: 'Pendiente de análisis técnico',
       failed: 'Error al leer el archivo',
@@ -580,30 +779,41 @@ function tokenForEditing() {
 
 async function saveObservationIdentity(observationIndex, assignment) {
   const pathToEdit = selectedVideoPath;
-  if (!pathToEdit) return;
+  const expectedRevision = selectedMetadataRevision;
+  if (!pathToEdit || !expectedRevision) return false;
   const token = tokenForEditing();
-  if (!token) return;
+  if (!token) return false;
   try {
-    const response = await fetch(`${API_BASE}/api/metadata/person`, {
+    const response = await apiFetch(`${API_BASE}/api/metadata/person`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ path: pathToEdit, observation_index: observationIndex, ...assignment })
+      body: JSON.stringify({ path: pathToEdit, analysis_revision: expectedRevision,
+        observation_index: observationIndex, ...assignment })
     });
     if (response.status === 401) editToken = null;
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    if (!response.ok) {
+      const result = await response.json().catch(() => ({}));
+      if (response.status === 409 && selectedVideoPath === pathToEdit) await loadMetadata(pathToEdit);
+      throw new Error(result.error || `HTTP ${response.status}`);
+    }
     const result = await response.json();
     knownPeople = result.people || knownPeople;
     if (selectedVideoPath === pathToEdit) await loadMetadata(pathToEdit);
+    return true;
   } catch (error) {
     window.alert(`No se pudo guardar la identificación: ${error.message}`);
+    return false;
   }
 }
 
 async function openPeopleDirectory() {
   try {
-    const response = await fetch(`${API_BASE}/api/people`);
+    const response = await apiFetch(`${API_BASE}/api/people`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    knownPeople = (await response.json()).items || [];
+    const data = await response.json();
+    knownPeople = data.items || [];
+    knownPersonMerges = data.merges || [];
+    canEditPeopleDirectory = Boolean(data.can_edit_people);
     renderPeopleDirectory();
     peopleDialog.showModal();
   } catch (error) {
@@ -618,11 +828,12 @@ function renderPeopleDirectory() {
     empty.className = 'p-4 text-sm text-gray-400';
     empty.textContent = 'Todavía no hay personas identificadas. Asigná un nombre a una aparición desde la ficha de un video.';
     peopleDirectory.appendChild(empty);
-    return;
   }
   for (const person of knownPeople) {
+    const row = document.createElement('div');
+    row.className = 'flex flex-wrap items-center gap-2 rounded-lg px-2 py-2 hover:bg-gray-700';
     const button = document.createElement('button');
-    button.className = 'flex w-full items-center justify-between gap-3 rounded-lg px-3 py-3 text-left hover:bg-gray-700';
+    button.className = 'flex min-w-0 flex-1 items-center justify-between gap-3 py-1 text-left';
     const name = document.createElement('span');
     name.className = 'font-medium';
     name.textContent = person.name;
@@ -631,6 +842,7 @@ function renderPeopleDirectory() {
     count.textContent = `${person.videos} ${person.videos === 1 ? 'video' : 'videos'}`;
     button.append(name, count);
     button.addEventListener('click', () => {
+      selectedPersonId = person.id;
       searchInput.value = person.name;
       mobileSearchInput.value = person.name;
       searchFrom.value = '';
@@ -640,7 +852,173 @@ function renderPeopleDirectory() {
       peopleDialog.close();
       updateSearch();
     });
-    peopleDirectory.appendChild(button);
+    row.appendChild(button);
+    if (canEditPeopleDirectory) {
+      const rename = document.createElement('button');
+      rename.type = 'button';
+      rename.className = 'shrink-0 rounded border border-gray-600 px-2 py-1 text-xs text-gray-300 hover:bg-gray-600 hover:text-white';
+      rename.textContent = 'Renombrar';
+      rename.setAttribute('aria-label', `Renombrar a ${person.name}`);
+      rename.addEventListener('click', () => renameDirectoryPerson(person));
+      row.appendChild(rename);
+      if (knownPeople.length > 1) {
+        const merge = document.createElement('button');
+        merge.type = 'button';
+        merge.className = 'shrink-0 rounded border border-amber-800 px-2 py-1 text-xs text-amber-200 hover:bg-amber-900';
+        merge.textContent = 'Combinar';
+        merge.setAttribute('aria-label', `Combinar ${person.name} con otra persona`);
+        merge.setAttribute('aria-expanded', 'false');
+        merge.setAttribute('aria-controls', `merge-panel-${person.id}`);
+        merge.addEventListener('click', () => {
+          const panel = row.querySelector('[data-merge-panel]');
+          panel.classList.toggle('hidden');
+          const expanded = !panel.classList.contains('hidden');
+          merge.setAttribute('aria-expanded', String(expanded));
+          if (expanded) panel.querySelector('select').focus();
+        });
+        row.appendChild(merge);
+        const panel = document.createElement('div');
+        panel.id = `merge-panel-${person.id}`;
+        panel.dataset.mergePanel = 'true';
+        panel.className = 'hidden flex w-full flex-wrap items-center gap-2 border-t border-gray-700 pt-2';
+        const targetSelect = document.createElement('select');
+        targetSelect.className = 'min-w-0 flex-1 rounded border border-gray-600 bg-gray-900 px-2 py-2 text-sm';
+        targetSelect.setAttribute('aria-label', `Persona destino para ${person.name}`);
+        for (const target of knownPeople.filter(item => item.id !== person.id)) {
+          const option = document.createElement('option');
+          option.value = String(target.id);
+          option.textContent = `${target.name} · ${target.videos} ${target.videos === 1 ? 'video' : 'videos'}`;
+          targetSelect.appendChild(option);
+        }
+        const confirmMerge = document.createElement('button');
+        confirmMerge.type = 'button';
+        confirmMerge.className = 'rounded bg-amber-700 px-3 py-2 text-sm hover:bg-amber-600';
+        confirmMerge.textContent = 'Continuar';
+        confirmMerge.addEventListener('click', () => mergeDirectoryPerson(person, Number(targetSelect.value)));
+        const cancelMerge = document.createElement('button');
+        cancelMerge.type = 'button';
+        cancelMerge.className = 'rounded border border-gray-600 px-3 py-2 text-sm hover:bg-gray-700';
+        cancelMerge.textContent = 'Cancelar';
+        cancelMerge.addEventListener('click', () => {
+          panel.classList.add('hidden');
+          merge.setAttribute('aria-expanded', 'false');
+          merge.focus();
+        });
+        panel.append(targetSelect, confirmMerge, cancelMerge);
+        row.appendChild(panel);
+      }
+    }
+    peopleDirectory.appendChild(row);
+  }
+  renderPersonMergeHistory();
+}
+
+async function renameDirectoryPerson(person) {
+  const name = window.prompt(`Nuevo nombre para ${person.name}:`, person.name);
+  if (name == null || name.trim() === person.name) return;
+  const token = tokenForEditing();
+  if (!token) return;
+  try {
+    const response = await apiFetch(`${API_BASE}/api/people/${person.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ name: name.trim() })
+    });
+    if (response.status === 401) editToken = null;
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    knownPeople = result.items || knownPeople;
+    knownPersonMerges = result.merges || knownPersonMerges;
+    if (selectedPersonId === person.id) {
+      const canonicalName = knownPeople.find(item => item.id === person.id)?.name || name.trim();
+      searchInput.value = canonicalName;
+      mobileSearchInput.value = canonicalName;
+      updateSearch();
+    }
+    renderPeopleDirectory();
+  } catch (error) {
+    window.alert(`No se pudo renombrar la persona: ${error.message}`);
+  }
+}
+
+async function mergeDirectoryPerson(source, targetId) {
+  const targets = knownPeople.filter(person => person.id !== source.id);
+  const target = targets.find(person => person.id === targetId);
+  if (!target) {
+    window.alert('Ese ID no corresponde a otra persona del catálogo.');
+    return;
+  }
+  if (!window.confirm(`Mover las asignaciones de “${source.name}” a “${target.name}”. Se guardará la fusión y se podrá deshacer desde este directorio. ¿Continuar?`)) return;
+  const token = tokenForEditing();
+  if (!token) return;
+  try {
+    const response = await apiFetch(`${API_BASE}/api/people/${source.id}/merge`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ target_person_id: target.id })
+    });
+    if (response.status === 401) editToken = null;
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    knownPeople = result.items || knownPeople;
+    knownPersonMerges = result.merges || knownPersonMerges;
+    if (selectedPersonId === source.id) {
+      selectedPersonId = target.id;
+      searchInput.value = target.name;
+      mobileSearchInput.value = target.name;
+      updateSearch();
+    }
+    renderPeopleDirectory();
+  } catch (error) {
+    window.alert(`No se pudo combinar las personas: ${error.message}`);
+  }
+}
+
+function renderPersonMergeHistory() {
+  if (!knownPersonMerges.length) return;
+  const section = document.createElement('section');
+  section.className = 'mt-4 border-t border-gray-700 pt-3';
+  const heading = document.createElement('h3');
+  heading.className = 'mb-2 text-sm font-semibold';
+  heading.textContent = 'Historial de fusiones';
+  section.appendChild(heading);
+  for (const merge of knownPersonMerges) {
+    const row = document.createElement('div');
+    row.className = 'mb-2 flex items-center justify-between gap-2 rounded bg-gray-900/60 p-2 text-xs';
+    const description = document.createElement('span');
+    description.textContent = `${merge.source_name} → ${merge.target_name} · ${merge.status === 'active' ? 'activa' : 'deshecha'}`;
+    row.appendChild(description);
+    if (canEditPeopleDirectory && merge.status === 'active') {
+      const undo = document.createElement('button');
+      undo.type = 'button';
+      undo.className = 'shrink-0 rounded border border-gray-600 px-2 py-1 hover:bg-gray-700';
+      undo.textContent = 'Deshacer';
+      undo.addEventListener('click', () => undoDirectoryMerge(merge));
+      row.appendChild(undo);
+    }
+    section.appendChild(row);
+  }
+  peopleDirectory.appendChild(section);
+}
+
+async function undoDirectoryMerge(merge) {
+  if (!window.confirm(`Deshacer la fusión de “${merge.source_name}” en “${merge.target_name}”? Las asignaciones que se hayan cambiado después se conservarán.`)) return;
+  const token = tokenForEditing();
+  if (!token) return;
+  try {
+    const response = await apiFetch(`${API_BASE}/api/people/merges/${merge.id}/undo`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if (response.status === 401) editToken = null;
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    knownPeople = result.items || knownPeople;
+    knownPersonMerges = result.merges || knownPersonMerges;
+    if (selectedPersonId === merge.target_person_id) updateSearch();
+    renderPeopleDirectory();
+  } catch (error) {
+    window.alert(`No se pudo deshacer la fusión: ${error.message}`);
   }
 }
 
@@ -654,16 +1032,146 @@ function renderVisualMetadata(item) {
   visualSummary.textContent = item.visual_summary || '';
   visualUncertainty.textContent = item.visual_uncertainty ? `Límites de la descripción: ${item.visual_uncertainty}` : 'Descripción basada en fotogramas puntuales.';
   renderIdentityAssignments(item);
-  renderTimedList(visualEvents, 'Momentos observados', item.visual_events);
-  renderTimedList(visualDateClues, 'Pistas de fecha visibles', item.visual_date_clues);
+  renderTimedList(visualEvents, 'Momentos observados', item.visual_events, item);
+  renderTimedList(visualDateClues, 'Pistas de fecha visibles', item.visual_date_clues, item);
   visualPlaces.textContent = item.visual_places?.length ? `Lugares o entornos: ${item.visual_places.join(', ')}` : '';
 }
 
 function renderIdentityAssignments(item) {
   visualPeople.replaceChildren();
   const observations = item.visual_people || [];
+  const stale = item.stale_identifications || [];
+  if (stale.length) {
+    const review = document.createElement('div');
+    review.className = 'mb-3 rounded-lg border border-amber-700 bg-amber-950/30 p-3 text-sm text-amber-100';
+    const heading = document.createElement('strong');
+    heading.textContent = 'Asignaciones de una ficha anterior: revisalas';
+    review.appendChild(heading);
+    const list = document.createElement('div');
+    list.className = 'mt-2 space-y-2';
+    stale.forEach(previous => {
+      const entry = document.createElement('div');
+      entry.className = 'rounded border border-amber-800/70 p-2';
+      const description = previous.description || 'Observación sin descripción';
+      const time = `${Math.floor(previous.at_seconds / 60)}:${String(Math.floor(previous.at_seconds % 60)).padStart(2, '0')}`;
+      const summary = document.createElement('p');
+      summary.textContent = `${previous.name}: ${description} (${time})`;
+      entry.appendChild(summary);
+      appendStaleEvidenceThumbnail(entry, item, previous);
+      if (item.can_edit_people) {
+        const dismiss = document.createElement('button');
+        dismiss.type = 'button';
+        dismiss.className = 'mt-2 rounded border border-gray-600 px-3 py-2 text-xs text-gray-200 hover:bg-gray-700';
+        dismiss.textContent = 'Resolver sin reasignar';
+        dismiss.addEventListener('click', async () => {
+          if (!window.confirm(`Marcar la identificación anterior de ${previous.name} como revisada sin asignarla a una observación actual? Se conservará en el historial.`)) return;
+          const pathToReview = selectedVideoPath;
+          const token = tokenForEditing();
+          if (!token) return;
+          try {
+            const response = await apiFetch(`${API_BASE}/api/metadata/person/review-stale`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+              body: JSON.stringify({ path: pathToReview,
+                analysis_revision: previous.analysis_revision,
+                observation_index: previous.observation_index })
+            });
+            if (response.status === 401) editToken = null;
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+            if (selectedVideoPath === pathToReview) await loadMetadata(pathToReview);
+          } catch (error) {
+            window.alert(`No se pudo resolver la identificación anterior: ${error.message}`);
+          }
+        });
+        entry.appendChild(dismiss);
+      }
+      if (observations.length && item.can_edit_people) {
+        const controls = document.createElement('div');
+        controls.className = 'mt-2 flex flex-col gap-2';
+        const identitySelect = document.createElement('select');
+        identitySelect.className = 'w-full rounded border border-amber-800 bg-gray-900 px-2 py-2 text-sm text-white';
+        identitySelect.setAttribute('aria-label', `Elegir identidad para la observación anterior de ${previous.name}`);
+        for (const person of knownPeople) {
+          const option = document.createElement('option');
+          option.value = String(person.id);
+          option.textContent = person.name;
+          identitySelect.appendChild(option);
+        }
+        identitySelect.value = String(previous.person_id);
+        const select = document.createElement('select');
+        select.className = 'min-w-0 flex-1 rounded border border-amber-800 bg-gray-900 px-2 py-2 text-sm text-white';
+        select.setAttribute('aria-label', `Elegir observación actual para vincular con ${previous.name}`);
+        const placeholder = document.createElement('option');
+        placeholder.value = '';
+        placeholder.textContent = 'Elegí una observación de la ficha actual…';
+        select.appendChild(placeholder);
+        observations.forEach((observation, index) => {
+          const option = document.createElement('option');
+          option.value = String(index);
+          option.textContent = `${observation.description} (${Math.floor(observation.at_seconds / 60)}:${String(Math.floor(observation.at_seconds % 60)).padStart(2, '0')})`;
+          select.appendChild(option);
+        });
+        const apply = document.createElement('button');
+        apply.type = 'button';
+        apply.className = 'rounded bg-amber-700 px-3 py-2 text-sm hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-50';
+        apply.textContent = 'Reasignar';
+        apply.disabled = true;
+        const updateApplyState = () => { apply.disabled = select.value === '' || identitySelect.value === ''; };
+        select.addEventListener('change', updateApplyState);
+        identitySelect.addEventListener('change', updateApplyState);
+        apply.addEventListener('click', async () => {
+          if (select.value === '') return;
+          apply.disabled = true;
+          const saved = await saveObservationIdentity(Number(select.value), {
+            person_id: Number(identitySelect.value),
+            stale_observation: {
+              analysis_revision: previous.analysis_revision,
+              observation_index: previous.observation_index
+            }
+          });
+          if (!saved) apply.disabled = false;
+        });
+        controls.append(identitySelect, select, apply);
+        entry.appendChild(controls);
+      }
+      list.appendChild(entry);
+    });
+    review.appendChild(list);
+    visualPeople.appendChild(review);
+  }
+  const history = item.identity_history || [];
+  if (history.length) {
+    const details = document.createElement('details');
+    details.className = 'rounded-lg border border-gray-700 bg-gray-900/40 p-3';
+    const summary = document.createElement('summary');
+    summary.className = 'cursor-pointer text-sm text-gray-300';
+    summary.textContent = `Historial de identificaciones (${history.length}${history.length === 100 ? '+' : ''})`;
+    details.appendChild(summary);
+    const list = document.createElement('ol');
+    list.className = 'mt-2 max-h-48 space-y-2 overflow-y-auto text-xs text-gray-400';
+    for (const change of history) {
+      const entry = document.createElement('li');
+      const from = change.action === 'reconciled'
+        ? `Ficha anterior: ${change.stale_person_name || 'Sin identificar'}; observación actual: ${change.previous_name || 'Sin identificar'}`
+        : change.previous_name || 'Sin identificar';
+      const to = change.person_name || 'Sin identificar';
+      const action = change.action === 'reconciled' ? 'Reconciliada'
+        : change.action === 'assigned' ? 'Identificada'
+        : change.action === 'removed' ? 'Quitada'
+        : change.action === 'dismissed' ? 'Resuelta sin reasignar' : 'Cambiada';
+      const date = new Date(`${change.changed_at.replace(' ', 'T')}Z`);
+      const when = Number.isNaN(date.getTime()) ? change.changed_at : date.toLocaleString();
+      entry.textContent = `${when} · ${action}: ${from} → ${to} (observación ${change.observation_index + 1})`;
+      list.appendChild(entry);
+    }
+    details.appendChild(list);
+    visualPeople.appendChild(details);
+  }
   if (!observations.length) {
-    visualPeople.textContent = 'No se detectaron personas en los fotogramas analizados.';
+    const empty = document.createElement('p');
+    empty.textContent = 'No se detectaron personas en los fotogramas analizados.';
+    visualPeople.appendChild(empty);
     return;
   }
   identityHelp.textContent = item.can_edit_people
@@ -681,6 +1189,7 @@ function renderIdentityAssignments(item) {
       videoPlayer.play().catch(() => {});
     });
     row.appendChild(seek);
+    appendEvidenceThumbnail(row, item, observation.at_seconds, observation.description);
 
     const assigned = item.identified_people?.[index];
     if (!item.can_edit_people) {
@@ -727,14 +1236,62 @@ function renderIdentityAssignments(item) {
   });
 }
 
-function renderTimedList(container, label, items) {
+function appendEvidenceThumbnail(container, item, atSeconds, description) {
+  if (!item.visual_evidence?.some(evidence => evidence.at_seconds === atSeconds)) return;
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'col-span-full justify-self-start rounded border border-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400';
+  button.setAttribute('aria-label', `Ampliar fotograma de evidencia: ${description}`);
+  const image = document.createElement('img');
+  image.className = 'h-20 w-32 rounded object-contain bg-black';
+  image.loading = 'lazy';
+  image.alt = `Fotograma de evidencia en el segundo ${atSeconds}: ${description}`;
+  const params = new URLSearchParams({ path: item.relative_path, revision: item.visual_revision, at_seconds: String(atSeconds) });
+  image.src = `${API_BASE}/api/metadata/evidence?${params}`;
+  button.appendChild(image);
+  button.addEventListener('click', () => {
+    const expanded = image.classList.toggle('max-h-80');
+    image.classList.toggle('h-20', !expanded);
+    image.classList.toggle('w-32', !expanded);
+    image.classList.toggle('max-w-full', expanded);
+    image.classList.toggle('object-contain', true);
+    button.setAttribute('aria-label', `${expanded ? 'Reducir' : 'Ampliar'} fotograma de evidencia: ${description}`);
+  });
+  container.appendChild(button);
+}
+
+function appendStaleEvidenceThumbnail(container, item, previous) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'mt-2 rounded border border-gray-700 focus:outline-none focus:ring-2 focus:ring-amber-400';
+  button.setAttribute('aria-label', `Ampliar fotograma anterior de ${previous.name}`);
+  const image = document.createElement('img');
+  image.className = 'h-20 w-32 rounded bg-black object-contain';
+  image.loading = 'lazy';
+  image.alt = `Fotograma anterior en el segundo ${previous.at_seconds}: ${previous.description}`;
+  const params = new URLSearchParams({ path: item.relative_path,
+    revision: previous.analysis_revision, at_seconds: String(previous.at_seconds) });
+  image.src = `${API_BASE}/api/metadata/evidence?${params}`;
+  image.addEventListener('error', () => button.remove(), { once: true });
+  button.appendChild(image);
+  button.addEventListener('click', () => {
+    const expanded = image.classList.toggle('max-h-80');
+    image.classList.toggle('h-20', !expanded);
+    image.classList.toggle('w-32', !expanded);
+    image.classList.toggle('max-w-full', expanded);
+  });
+  container.appendChild(button);
+}
+
+function renderTimedList(container, label, items, videoItem) {
   container.replaceChildren();
   if (!items?.length) return;
   const heading = document.createElement('strong');
   heading.textContent = `${label}: `;
   container.appendChild(heading);
-  items.forEach((item, index) => {
-    if (index) container.appendChild(document.createTextNode(' · '));
+  items.forEach(item => {
+    const entry = document.createElement('div');
+    entry.className = 'mb-2 flex flex-wrap items-center gap-x-2 gap-y-1';
     const button = document.createElement('button');
     button.className = 'text-blue-300 hover:text-white underline';
     button.textContent = `${item.description} (${Math.floor(item.at_seconds / 60)}:${String(item.at_seconds % 60).padStart(2, '0')})`;
@@ -742,18 +1299,31 @@ function renderTimedList(container, label, items) {
       videoPlayer.currentTime = item.at_seconds;
       videoPlayer.play().catch(() => {});
     });
-    container.appendChild(button);
+    entry.appendChild(button);
+    appendEvidenceThumbnail(entry, videoItem, item.at_seconds, item.description);
+    container.appendChild(entry);
   });
 }
 
 function openMobileSidebar() {
   mobileSidebar.classList.remove('-translate-x-full');
+  mobileSidebar.inert = false;
+  mobileSidebar.setAttribute('aria-hidden', 'false');
   sidebarOverlay.classList.remove('hidden');
+  mobileMenuBtn.setAttribute('aria-expanded', 'true');
+  document.querySelector('.main-content').inert = true;
   document.body.style.overflow = 'hidden';
+  mobileSearchInput.focus();
 }
 
 function closeMobileSidebar() {
+  const wasOpen = !sidebarOverlay.classList.contains('hidden');
   mobileSidebar.classList.add('-translate-x-full');
+  mobileSidebar.inert = true;
+  mobileSidebar.setAttribute('aria-hidden', 'true');
   sidebarOverlay.classList.add('hidden');
+  mobileMenuBtn.setAttribute('aria-expanded', 'false');
+  document.querySelector('.main-content').inert = false;
   document.body.style.overflow = '';
+  if (wasOpen) mobileMenuBtn.focus();
 }

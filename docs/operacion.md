@@ -72,7 +72,7 @@ Aplicar `sudo systemctl daemon-reload`; el siguiente arranque usará esos valore
 
 ## Ejecución técnica sin privilegios de systemd
 
-Es posible ejecutar el indexador como el usuario con acceso a los videos y a la base. Primero comprobar que el servicio o su temporizador no vaya a lanzar otra instancia durante ese recorrido. Si se dispone de privilegios, detener temporalmente el timer y restablecerlo después. No lanzar dos indexadores simultáneamente.
+Es posible ejecutar el indexador como el usuario con acceso a los videos y a la base. Un bloqueo SQLite compartido impide que el indexador y el analizador visual recorran o modifiquen la biblioteca al mismo tiempo; también se mantiene la exclusión por etapa para evitar dos instancias iguales. La segunda instancia termina indicando qué bloqueo está ocupado. No borrar manualmente `process_locks` mientras el proceso propietario siga vivo.
 
 ```bash
 cd /home/jorge/orca/workspaces/Video-Home/meta-data-videos
@@ -88,13 +88,15 @@ Esta ejecución no cambia el estado de la unidad systemd. El analizador visual t
 | Síntoma | Comprobación y acción |
 |---|---|
 | Solo una ficha visual por ejecución | Ver tamaño efectivo del lote y selector `VISUAL_VIDEO_ID`; leer el contador `Visual batch` del registro. No asumir una causa sin revisar configuración |
-| Muchas fichas visuales pendientes | Solo son elegibles las técnicas `done`. No hay encadenamiento ni timer visual |
-| `401` / `403` del proveedor | Revisar credencial, acceso y configuración desde el archivo protegido; no compartir la clave |
-| `429` | El lote se detiene. Consultar la cuota de la cuenta y reintentar después; no hay backoff automático |
+| Muchas fichas visuales pendientes | Solo son elegibles las técnicas `done`. El timer visual es opcional y no queda habilitado por defecto; ver Configuración |
+| `401` / `403` del proveedor | El trabajador pausa la etapa y no vuelve a llamar con la misma configuración. Revisar credencial/permisos; cambiar clave, modelo o endpoint y reiniciar el trabajador para reactivar |
+| `429` | El lote se detiene y la ficha recibe una espera exponencial (inicia en cinco minutos, máximo 24 horas). Consultar la cuota; el siguiente arranque solo la toma cuando vence el plazo y `RETRY_VISUAL_FAILED=1` |
+| Pausa de proveedor visible | `/api/index/status` incluye `visual_provider_control`; los fallos de cuota o red esperan hasta el horario indicado, y los errores de configuración requieren cambiar clave/modelo/endpoint |
+| Presupuesto diario visual agotado | Revisar `visual_daily_budget` en `/api/index/status`; las fichas restantes siguen pendientes. El contador usa UTC y se renueva a las 00:00 UTC; iniciar otro lote después de ese momento |
 | JSON inválido o esquema incompatible | Revisar `visual_error`; el proveedor debe aceptar imágenes y salida estructurada. Reintentar de forma acotada o revisar el modelo |
 | `ffprobe` o `ffmpeg` lento | Ver montaje, caché y archivo actual. Un timeout de proceso no garantiza respuesta inmediata de una lectura FUSE bloqueada |
 | Contador recorrido en cero | Se persiste cada 100 archivos; contrastar crecimiento de fichas y proceso activo |
-| `running` tras un cierre abrupto | Confirmar que no haya proceso vivo. Registrar el incidente y corregir el estado con respaldo; no arrancar una segunda instancia a ciegas |
+| `running` tras un cierre abrupto | La interfaz marca `stale` cuando el PID del mismo host ya no existe. El indexador reconcilia recorridos abandonados al iniciar; el analizador visual programa el video interrumpido para reintento diferido. No borrar el bloqueo mientras su proceso siga vivo |
 | SIGSEGV / `core-dump` | Consultar journal y, si está instalado, `coredumpctl info`; revisar runtime Node y módulo nativo. La causa observada sigue sin determinar |
 | Servicio técnico sigue `failed` tras un lote manual exitoso | Son estados diferentes. `sudo systemctl reset-failed pcloud-video-indexer.service` limpia el registro de systemd; no repara ni procesa archivos |
 | Video visible pero no reproducible | Comprobar códec del navegador y lectura remota. No existe transcodificación |
@@ -103,42 +105,43 @@ Esta ejecución no cambia el estado de la unidad systemd. El analizador visual t
 
 ## Respaldo
 
-Respaldar código/configuración, base SQLite y credenciales de rclone/proveedor por canales apropiados para cada contenido. Los originales de video son una fuente separada. La caché VFS y `node_modules` se pueden reconstruir; las confirmaciones manuales de personas no se recuperan simplemente volviendo a analizar.
+Respaldar código/configuración, base SQLite, `DATA_DIR/evidence` y credenciales de rclone/proveedor por canales apropiados para cada contenido. Los originales de video son una fuente separada. La caché VFS y `node_modules` se pueden reconstruir; las confirmaciones manuales de personas no se recuperan simplemente volviendo a analizar.
 
-Con WAL activo, no copiar únicamente `videos.sqlite` mientras hay escritores: puede faltar información aún presente en el WAL. Desde la raíz del proyecto, una copia consistente puede crearse mediante la API de backup de la dependencia instalada:
+Las imágenes de evidencia viven en `DATA_DIR/evidence/<video_id>/<revision>`. Además de la revisión activa, se conservan las anteriores mientras tengan identificaciones pendientes. Para respaldar base e imágenes como un conjunto coherente, detener servidor, timers, trabajadores y procesos manuales; anotar cuáles estaban activos para restaurarlos al terminar.
 
-```bash
-video_backup_dir="${XDG_STATE_HOME:-$HOME/.local/state}/pcloud-video-backups"
-mkdir -p "$video_backup_dir"
-chmod 700 "$video_backup_dir"
-DB_BACKUP="$video_backup_dir/videos-$(date +%Y%m%d-%H%M%S).sqlite" \
-node <<'NODE'
-const Database = require('better-sqlite3');
-const path = require('path');
-const source = path.join(process.env.DATA_DIR || path.join(process.cwd(), 'data'), 'videos.sqlite');
-const db = new Database(source, { readonly: true });
-db.backup(process.env.DB_BACKUP)
-  .then(() => console.log('Respaldo completado'))
-  .catch(error => { console.error(error.message); process.exitCode = 1; })
-  .finally(() => db.close());
-NODE
-```
-
-Ajustar `DATA_DIR` si la base no está en `./data`. El ejemplo guarda las copias fuera del repositorio, en un directorio privado del usuario. Replicarlas a un destino de respaldo independiente. Verificar integridad y lectura del respaldo antes de considerarlo recuperable; si se dispone de sqlite3:
+Con WAL activo, no copiar únicamente `videos.sqlite` mientras hay escritores: puede faltar información aún presente en el WAL. El comando genera una copia mediante la API SQLite de la dependencia instalada, verifica su integridad y copia las imágenes con permisos privados. Comprueba los bloqueos antes de tomar la instantánea, dentro de la copia y nuevamente al terminar de copiar las evidencias. Aborta si detecta un bloqueo de trabajador con PID vivo en este host o un bloqueo registrado en otro host; limpia de la copia únicamente los bloqueos locales abandonados para que no queden atados a PID/host viejos. Ejecutarlo desde la raíz del proyecto:
 
 ```bash
-sqlite3 /ruta/al/respaldo.sqlite 'PRAGMA integrity_check;'
+sudo systemctl stop pcloud-video-indexer.timer pcloud-video-visual.timer
+sudo systemctl stop pcloud-video-indexer.service pcloud-video-visual.service pcloud-video-streamer.service
+pgrep -af 'node (indexer|visual-analyzer|server)\.js'
+DATA_DIR="$PWD/data" npm run backup -- /ruta/privada/pcloud-video-backups
 ```
 
-Resultado esperado: `ok`. Este documento no ejecutó una restauración.
+Si el timer visual no está instalado, quitarlo del comando. Si `pgrep` muestra procesos manuales, esperar a que terminen o detenerlos antes de copiar. Cada copia queda en un directorio fechado con `videos.sqlite`, `evidence/` si existe, `manifest.json` y un archivo `COMPLETE`. El programa falla si la base no pasa `integrity_check`. Verificar la copia antes de replicarla a un destino independiente:
+
+```bash
+npm run verify-backup -- /ruta/privada/pcloud-video-backups/pcloud-video-FECHA-PID
+sudo systemctl start pcloud-video-streamer.service
+```
+
+El verificador comprueba el marcador, integridad SQLite, claves foráneas, tablas requeridas, SHA-256 de la base y del árbol de evidencia (en el formato de manifiesto v2), cantidad/tamaño total de evidencia y presencia de cada fotograma referenciado por fichas vigentes. Acepta manifiestos anteriores v1, que no guardan hashes. Reactivar solo los timers que estaban activos antes del respaldo. Este procedimiento no sustituye una restauración de prueba; este documento todavía no ejecutó una.
 
 ## Restauración
 
-1. Detener timer, servidor y ambos servicios de lote; verificar también procesos manuales. Evitar cualquier escritor durante la sustitución.
-2. Conservar el directorio de datos actual completo, incluidos WAL/SHM, en otra ubicación. No mezclar archivos WAL antiguos con una base restaurada.
-3. Crear un nuevo `DATA_DIR`, colocar el backup consistente como `videos.sqlite` y asignar permisos al usuario del servicio.
-4. Verificar integridad, conteos, nombres confirmados y rutas de una muestra. Mantener el respaldo previo para poder revertir.
-5. Iniciar el servidor y revisar interfaz/API. Reactivar después el temporizador técnico. El visual sigue siendo manual.
+Detener timer, servidor y ambos servicios de lote; verificar también procesos manuales. Evitar cualquier escritor durante la restauración. Conservar el directorio de datos actual completo, incluidos WAL/SHM, en otra ubicación; no mezclar esos archivos con la base restaurada.
+
+Restaurar siempre a un `DATA_DIR` nuevo que todavía no exista. El comando verifica primero el respaldo, copia la base y las evidencias, y vuelve a comprobar integridad, claves foráneas y tamaño de las evidencias:
+
+```bash
+npm run restore-data -- \
+  /ruta/privada/pcloud-video-backups/pcloud-video-FECHA-PID \
+  /home/jorge/orca/workspaces/Video-Home/meta-data-videos/data-restored
+```
+
+La ruta destino contiene `videos.sqlite`, `evidence/` si estaba en el respaldo y `RESTORE_COMPLETE`. Si falla una comprobación, el comando elimina la carpeta destino que acaba de crear. Apuntar `DATA_DIR` a esa ruta nueva en el servidor, el indexador y el analizador visual; deben compartir exactamente la misma base. Asignar permisos al usuario de systemd y aplicar `daemon-reload` si cambió un archivo de entorno.
+
+Iniciar primero el servidor y revisar interfaz/API, conteos, nombres confirmados y rutas de una muestra. Mantener el directorio anterior y el respaldo para poder revertir. Reactivar después solo los timers que estaban activos antes de la restauración; el timer visual es opcional y queda deshabilitado por defecto.
 
 ## Desarrollo y comprobaciones
 

@@ -18,7 +18,9 @@ COPY --from=builder /app/node_modules ./node_modules
 COPY --chown=nodejs:nodejs server.js ./
 COPY --chown=nodejs:nodejs indexer.js metadata-store.js ./
 COPY --chown=nodejs:nodejs visual-analyzer.js ./
+COPY --chown=nodejs:nodejs config.js ./
 COPY --chown=nodejs:nodejs public ./public
+COPY --chown=nodejs:nodejs scripts ./scripts
 COPY --chown=nodejs:nodejs package*.json ./
 
 USER nodejs

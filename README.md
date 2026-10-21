@@ -9,11 +9,11 @@ Documentación revisada contra el código el **21 de octubre de 2026**. Las cifr
 - Navegación por carpetas y reproducción HTML5 con peticiones HTTP Range.
 - Inventario incremental en SQLite y extracción de duración, resolución, formato y fechas con `ffprobe`.
 - Análisis de hasta cuatro fotogramas mediante **OpenRouter Chat Completions**, con una ficha en español y referencias temporales.
-- Búsqueda textual FTS5, filtros por fecha sugerida y paginación.
+- Búsqueda textual FTS5, filtros por fecha sugerida, persona exacta o carpeta, y paginación.
 - Catálogo de personas: asignación manual de un nombre a cada observación, integrada en el streamer.
-- Panel de progreso técnico y visual, actualizado cada 15 segundos mientras la pestaña está visible.
+- Panel de progreso técnico y visual, con lotes recientes y contador diario de solicitudes del proveedor.
 
-El análisis visual no transcribe audio, no reconoce identidades automáticamente y no examina cada instante del video. La reproducción depende de los códecs que soporte el navegador; no hay transcodificación. El analizador visual trabaja por lotes manuales: no existe un temporizador visual instalado por el proyecto.
+El análisis visual no transcribe audio, no reconoce identidades automáticamente y no examina cada instante del video. La reproducción depende de los códecs que soporte el navegador; no hay transcodificación. El analizador visual trabaja por lotes manuales por defecto; el repositorio incluye un temporizador opcional que no queda habilitado durante la instalación.
 
 ## Documentación
 
@@ -52,13 +52,14 @@ npm run index
 
 `inventory` recorre el árbol sin ejecutar `ffprobe`. `index` vuelve a recorrerlo y analiza como máximo 50 archivos elegibles por ejecución. No ejecutar dos indexadores a la vez. Para el análisis visual, configurar la clave y los límites siguiendo [Configuración](docs/configuracion.md).
 
-Abrir `http://localhost:3001`. Guardar SQLite en disco local persistente, fuera de pCloud. El servidor escucha en todas las interfaces; el acceso de lectura no tiene autenticación integrada. El despliegue de una biblioteca privada debe restringir ese acceso mediante la red o un proxy autenticado.
+Abrir `http://localhost:3001`. Guardar SQLite en disco local persistente, fuera de pCloud. El servidor escucha en todas las interfaces y, por compatibilidad, queda abierto si `ACCESS_TOKEN` no está configurado. Para una biblioteca privada, configurar `ACCESS_TOKEN` y, al exponerla fuera de localhost, HTTPS con `ACCESS_COOKIE_SECURE=1`; ver [Configuración](docs/configuracion.md).
 
 ## Mapa del repositorio
 
 ```text
 server.js                        Servidor web, API, reproducción y autorización de edición
 metadata-store.js                SQLite, esquema, estados, búsquedas y personas
+config.js                        Validación de configuración de los trabajadores
 indexer.js                       Inventario y fichas técnicas
 visual-analyzer.js               Fotogramas, petición a OpenRouter y persistencia visual
 public/index.html                Interfaz y estilos
@@ -70,6 +71,7 @@ pcloud-video-visual.service      Lote visual manual
 rclone-pcloud.service            Montaje remoto
 Dockerfile                      Imagen con Node y ffmpeg
 package.json / package-lock.json Dependencias y scripts npm
+scripts/                         Respaldo, verificación y restauración de DATA_DIR
 data/                           SQLite local; excluido de Git
 docs/                           Documentación y planes históricos
 ```

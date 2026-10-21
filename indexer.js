@@ -2,15 +2,17 @@ const fs = require('fs');
 const path = require('path');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
-const { db, getByPath, upsert } = require('./metadata-store');
+const { db, getByPath, upsert, withJobLock, setWorkerConfiguration, setWorkerActivity } = require('./metadata-store');
+const { indexerConfiguration } = require('./config');
 
 const execFileAsync = promisify(execFile);
 const VIDEO_ROOT = path.resolve(process.env.VIDEO_ROOT || '/mnt/pcloud/My Videos');
 const VIDEO_EXTENSIONS = new Set(['.mp4', '.mkv', '.webm', '.mov', '.avi', '.m4v', '.flv', '.wmv', '.mpg', '.mpeg']);
-const PROBE_TIMEOUT_MS = Number(process.env.PROBE_TIMEOUT_MS || 30000);
-const INVENTORY_ONLY = process.env.INDEX_MODE === 'inventory';
-const MAX_PROBES = Number(process.env.MAX_PROBES ?? 50);
-const RETRY_FAILED = process.env.RETRY_FAILED === '1';
+const CONFIG = indexerConfiguration();
+const PROBE_TIMEOUT_MS = CONFIG.probe_timeout_ms;
+const INVENTORY_ONLY = CONFIG.inventory_only;
+const MAX_PROBES = CONFIG.max_probes;
+const RETRY_FAILED = CONFIG.retry_failed;
 
 function dateFromFilename(filename) {
   const match = filename.match(/(?:^|[^0-9])(19\d{2}|20\d{2})[-_. ]?(0[1-9]|1[0-2])[-_. ]?([0-2]\d|3[01])(?:[^0-9]|$)/);
@@ -91,6 +93,7 @@ async function scanDirectory(relativeDir, scanId, counters) {
       counters.seen++;
       if (counters.seen % 100 === 0) {
         db.prepare('UPDATE scans SET seen_count = ? WHERE id = ?').run(counters.seen, scanId);
+        setWorkerActivity('indexer', { phase: 'inventory', path: normalizedPath, result: `${counters.seen} videos recorridos` });
       }
       if (INVENTORY_ONLY) continue;
       if (previous && previous.fingerprint === fingerprint && previous.status === 'done') continue;
@@ -98,6 +101,7 @@ async function scanDirectory(relativeDir, scanId, counters) {
       if (MAX_PROBES > 0 && counters.attempted >= MAX_PROBES) continue;
       counters.attempted++;
 
+      setWorkerActivity('indexer', { phase: 'ffprobe', path: normalizedPath });
       const metadata = await probeVideo(fullPath, normalizedPath, stat);
       db.prepare(`UPDATE videos SET status = 'done', duration_ms = @duration_ms,
         width = @width, height = @height, codec = @codec, recorded_at = @recorded_at,
@@ -115,7 +119,10 @@ async function scanDirectory(relativeDir, scanId, counters) {
   }
 }
 
-async function runScan() {
+async function runScanLocked() {
+  db.prepare(`UPDATE scans SET status = 'interrupted', completed_at = CURRENT_TIMESTAMP,
+      error = COALESCE(error, 'El proceso anterior terminó antes de completar el recorrido')
+    WHERE status = 'running'`).run();
   const rootStat = await fs.promises.stat(VIDEO_ROOT);
   if (!rootStat.isDirectory()) throw new Error(`VIDEO_ROOT is not a directory: ${VIDEO_ROOT}`);
   const scan = db.prepare("INSERT INTO scans (status) VALUES ('running')").run();
@@ -130,12 +137,23 @@ async function runScan() {
       .run(scan.lastInsertRowid);
     db.prepare("UPDATE scans SET status = 'done', completed_at = CURRENT_TIMESTAMP, seen_count = ? WHERE id = ?")
       .run(counters.seen, scan.lastInsertRowid);
+    setWorkerActivity('indexer', { result: `${counters.probed} fichas técnicas completas` });
     console.log(JSON.stringify({ scan_id: scan.lastInsertRowid, ...counters }));
   } catch (error) {
     db.prepare("UPDATE scans SET status = 'failed', completed_at = CURRENT_TIMESTAMP, seen_count = ?, error = ? WHERE id = ?")
       .run(counters.seen, String(error.message).slice(0, 1000), scan.lastInsertRowid);
     throw error;
   }
+}
+
+function runScan() {
+  return withJobLock('indexer', () => {
+    setWorkerConfiguration('technical', {
+      probe_timeout_ms: PROBE_TIMEOUT_MS, max_probes: MAX_PROBES,
+      retry_failed: RETRY_FAILED, inventory_only: INVENTORY_ONLY
+    });
+    return runScanLocked();
+  });
 }
 
 if (require.main === module) {
