@@ -28,7 +28,7 @@ Errores comunes de edición: `503` si no se configuró el token, `401` si no coi
 | `PUT /api/metadata/person` | Asociación de una observación con un nombre |
 | `PATCH /api/metadata/people` | Lista general de nombres de compatibilidad |
 
-No existen endpoints para iniciar, pausar o cancelar análisis, renombrar/fusionar personas, editar fechas ni regenerar fichas desde la web.
+No existen endpoints para iniciar, pausar o cancelar análisis, fusionar personas, editar fechas ni regenerar fichas desde la web. El catálogo permite renombrar personas con `METADATA_EDIT_TOKEN`.
 
 ## Directorios y reproducción
 
