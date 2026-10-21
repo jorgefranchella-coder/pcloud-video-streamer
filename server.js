@@ -556,6 +556,11 @@ app.get('/api/stream', asyncRoute(async (req, res) => {
   }
 }));
 
+app.use((req, res, next) => {
+  if (req.path !== '/api' && !req.path.startsWith('/api/')) return next();
+  return res.status(404).json({ error: 'API route not found' });
+});
+
 app.use((error, req, res, next) => {
   if (!req.path.startsWith('/api/')) return next(error);
   if (res.headersSent) return next(error);
