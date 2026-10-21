@@ -47,14 +47,20 @@ async function main() {
     throw new Error('Usage: node scripts/restore-data.js /absolute/path/to/backup /absolute/path/to/new-data-dir');
   }
   const backupDir = path.resolve(backupDirArg);
-  const targetDir = path.resolve(targetDirArg);
+  let targetDir = path.resolve(targetDirArg);
   if (isWithin(backupDir, targetDir) || isWithin(targetDir, backupDir)) {
     throw new Error('Backup and restore directories must be separate trees');
   }
 
   await execFileAsync(process.execPath, [path.join(__dirname, 'verify-backup.js'), backupDir]);
+  const realBackupDir = await fs.promises.realpath(backupDir);
   const manifest = JSON.parse(await fs.promises.readFile(path.join(backupDir, 'manifest.json'), 'utf8'));
   await fs.promises.mkdir(path.dirname(targetDir), { recursive: true, mode: 0o700 });
+  const realTargetParent = await fs.promises.realpath(path.dirname(targetDir));
+  targetDir = path.join(realTargetParent, path.basename(targetDir));
+  if (isWithin(realBackupDir, targetDir) || isWithin(targetDir, realBackupDir)) {
+    throw new Error('Resolved backup and restore directories must be separate trees');
+  }
   await fs.promises.mkdir(targetDir, { mode: 0o700 });
   try {
     await fs.promises.copyFile(path.join(backupDir, 'videos.sqlite'), path.join(targetDir, 'videos.sqlite'), fs.constants.COPYFILE_EXCL);

@@ -50,10 +50,20 @@ async function main() {
   const databasePath = path.join(DATA_DIR, 'videos.sqlite');
   await fs.promises.access(databasePath, fs.constants.R_OK);
   await fs.promises.mkdir(backupRoot, { recursive: true, mode: 0o700 });
-  await fs.promises.chmod(backupRoot, 0o700);
+  const backupRootStat = await fs.promises.lstat(backupRoot);
+  if (!backupRootStat.isDirectory() || backupRootStat.isSymbolicLink()) {
+    throw new Error('Backup root must be a real directory, not a symlink');
+  }
+  const realDataDir = await fs.promises.realpath(DATA_DIR);
+  const realBackupRoot = await fs.promises.realpath(backupRoot);
+  if (isWithin(realDataDir, realBackupRoot) || isWithin(realBackupRoot, realDataDir)) {
+    throw new Error('Resolved backup directory and DATA_DIR must be separate trees');
+  }
+  const destinationRoot = realBackupRoot;
+  await fs.promises.chmod(destinationRoot, 0o700);
 
   const timestamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
-  const backupDir = path.join(backupRoot, `pcloud-video-${timestamp}-${process.pid}`);
+  const backupDir = path.join(destinationRoot, `pcloud-video-${timestamp}-${process.pid}`);
   await fs.promises.mkdir(backupDir, { mode: 0o700 });
 
   const databaseBackupPath = path.join(backupDir, 'videos.sqlite.partial');
