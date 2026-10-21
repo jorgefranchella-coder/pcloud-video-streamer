@@ -403,7 +403,7 @@ function setWorkerConfiguration(worker, configuration) {
     .run(worker, JSON.stringify(configuration));
 }
 
-function search({ query, from, to, limit, offset }) {
+function search({ query, from, to, personId, limit, offset }) {
   const words = query.match(/[\p{L}\p{N}]+/gu)?.slice(0, 8) || [];
   const match = words.map(word => `"${word.replace(/"/g, '')}"*`).join(' AND ');
   const source = match ? 'video_fts JOIN videos ON videos.id = video_fts.rowid' : 'videos';
@@ -414,9 +414,13 @@ function search({ query, from, to, limit, offset }) {
     FROM ${source}
     WHERE ${matching}(? IS NULL OR videos.recorded_at >= ?)
       AND (? IS NULL OR videos.recorded_at <= ?)
+      AND (? IS NULL OR EXISTS (
+        SELECT 1 FROM video_person_observations vpo
+        WHERE vpo.video_id = videos.id AND vpo.analysis_revision = videos.visual_revision AND vpo.person_id = ?
+      ))
       AND videos.status != 'missing'
     ORDER BY videos.recorded_at IS NULL, videos.recorded_at DESC, videos.relative_path
-    LIMIT ? OFFSET ?`).all(...args, from, from, to, to, limit, offset);
+    LIMIT ? OFFSET ?`).all(...args, from, from, to, to, personId ?? null, personId ?? null, limit, offset);
 }
 
 function buildVisualSearchText({ events, people, places, keywords, dateClues, confirmedPeople }) {

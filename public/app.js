@@ -58,6 +58,7 @@ const visualProgressBar = document.getElementById('visualProgressBar');
 const scanProgressStatus = document.getElementById('scanProgressStatus');
 const effectiveConfiguration = document.getElementById('effectiveConfiguration');
 let selectedVideoPath = null;
+let selectedPersonId = null;
 let editToken = null;
 let knownPeople = [];
 let searchTimer;
@@ -273,6 +274,7 @@ function setupEventListeners() {
   closePeopleDialog.addEventListener('click', () => peopleDialog.close());
   for (const input of [searchInput, mobileSearchInput]) {
     input.addEventListener('input', () => {
+      selectedPersonId = null;
       const other = input === searchInput ? mobileSearchInput : searchInput;
       other.value = input.value;
       clearTimeout(searchTimer);
@@ -316,6 +318,7 @@ async function searchVideos(query, offset, requestId) {
     const params = new URLSearchParams({ q: query, offset: String(offset), limit: String(SEARCH_PAGE_SIZE) });
     if (searchFrom.value) params.set('from', searchFrom.value);
     if (searchTo.value) params.set('to', searchTo.value);
+    if (selectedPersonId) params.set('person_id', String(selectedPersonId));
     const response = await fetch(`${API_BASE}/api/search?${params}`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
@@ -666,6 +669,7 @@ function renderPeopleDirectory() {
     count.textContent = `${person.videos} ${person.videos === 1 ? 'video' : 'videos'}`;
     button.append(name, count);
     button.addEventListener('click', () => {
+      selectedPersonId = person.id;
       searchInput.value = person.name;
       mobileSearchInput.value = person.name;
       searchFrom.value = '';

@@ -117,9 +117,14 @@ app.get('/api/search', (req, res) => {
   const query = String(req.query.q || '').trim().slice(0, 100);
   const from = typeof req.query.from === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.query.from) ? req.query.from : null;
   const to = typeof req.query.to === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.query.to) ? req.query.to : null;
+  const personIdRaw = req.query.person_id;
+  const personId = personIdRaw === undefined ? null : /^\d+$/.test(String(personIdRaw)) ? Number(personIdRaw) : NaN;
+  if (personId !== null && (!Number.isSafeInteger(personId) || personId < 1)) {
+    return res.status(400).json({ error: 'Invalid person_id' });
+  }
   const limit = Math.min(Math.max(Number.parseInt(req.query.limit, 10) || 50, 1), 100);
   const offset = Math.max(Number.parseInt(req.query.offset, 10) || 0, 0);
-  res.json({ items: metadata.search({ query, from, to, limit, offset }), limit, offset });
+  res.json({ items: metadata.search({ query, from, to, personId, limit, offset }), limit, offset });
 });
 
 app.get('/api/metadata', (req, res) => {
