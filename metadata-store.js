@@ -440,6 +440,9 @@ function search({ query, from, to, personId, folder, limit, offset }) {
   const source = match ? 'video_fts JOIN videos ON videos.id = video_fts.rowid' : 'videos';
   const matching = match ? 'video_fts MATCH ? AND ' : '';
   const snippet = match ? "snippet(video_fts, 3, '⟦', '⟧', '…', 18) AS snippet" : 'NULL AS snippet';
+  const ordering = match
+    ? 'bm25(video_fts, 1.0, 5.0, 2.0, 1.0), videos.recorded_at IS NULL, videos.recorded_at DESC, videos.relative_path'
+    : 'videos.recorded_at IS NULL, videos.recorded_at DESC, videos.relative_path';
   const args = match ? [match] : [];
   const rows = db.prepare(`SELECT videos.id, videos.relative_path, videos.recorded_at, videos.date_source,
       videos.status, videos.visual_title, videos.visual_summary, videos.visual_events_json, ${snippet}
@@ -452,7 +455,7 @@ function search({ query, from, to, personId, folder, limit, offset }) {
       ))
       AND (? IS NULL OR videos.relative_path = ? OR substr(videos.relative_path, 1, length(?) + 1) = ? || '/')
       AND videos.status != 'missing'
-    ORDER BY videos.recorded_at IS NULL, videos.recorded_at DESC, videos.relative_path
+    ORDER BY ${ordering}
     LIMIT ? OFFSET ?`).all(...args, from, from, to, to, personId ?? null, personId ?? null,
       folder ?? null, folder ?? null, folder ?? null, folder ?? null, limit, offset);
   const normalizedWords = words.map(word => word.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase());
