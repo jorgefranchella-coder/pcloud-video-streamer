@@ -24,7 +24,7 @@ Esfuerzo relativo: S = cambio acotado; M = varios módulos y comprobaciones; L =
 | P1 | Correcciones humanas persistentes | No hay editor general ni historial; las asignaciones desaparecen al regenerar. Separar borrador del modelo de correcciones, conservar versiones y ofrecer reconciliación tras cambios | L |
 | P1 | Respaldo y migraciones comprobables | Esquema se modifica al importar el módulo; no hay restauración automatizada validada. Migraciones numeradas, backup previo y recuperación comprobada sobre base temporal | M |
 | P2 | Evidencia visual dentro de la ficha | Se conserva el segundo, pero no la imagen enviada. Guardar miniaturas con política de retención y mostrar la evidencia al confirmar nombres o hechos | M |
-| P2 | Búsqueda por persona exacta, carpeta y momento | La interfaz filtra por ID de persona o restringe a una carpeta y sus descendientes. Pendiente: snippets y enlace al instante coincidente | M (en curso) |
+| P2 | Búsqueda por persona exacta, carpeta y momento | La interfaz filtra por ID, carpeta y muestra snippets FTS. Pendiente: enlace al instante coincidente | M (en curso) |
 | P2 | Mejoras de reproducción y acceso móvil | Sin manejo completo de Range/errores de stream; UI depende de CDN. Validar rangos, cerrar streams al desconectar, explicar errores de códec, compilar estilos locales y revisar foco/teclado | M |
 | P2 | Catálogo de personas administrable | No se puede renombrar, fusionar o deshacer; una observación grupal tiene un nombre único. Añadir operaciones auditadas, múltiples personas y confirmación por evidencia | M |
 | P2 | Muestreo por duración y escenas | Cuatro fotogramas fijos pueden perder eventos. Muestreo adaptativo con máximo de imágenes/bytes y medición de cobertura frente a un conjunto revisado | L |

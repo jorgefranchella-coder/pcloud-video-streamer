@@ -408,9 +408,10 @@ function search({ query, from, to, personId, folder, limit, offset }) {
   const match = words.map(word => `"${word.replace(/"/g, '')}"*`).join(' AND ');
   const source = match ? 'video_fts JOIN videos ON videos.id = video_fts.rowid' : 'videos';
   const matching = match ? 'video_fts MATCH ? AND ' : '';
+  const snippet = match ? "snippet(video_fts, 3, '⟦', '⟧', '…', 18) AS snippet" : 'NULL AS snippet';
   const args = match ? [match] : [];
   return db.prepare(`SELECT videos.id, videos.relative_path, videos.recorded_at, videos.date_source,
-      videos.status, videos.visual_title, videos.visual_summary
+      videos.status, videos.visual_title, videos.visual_summary, ${snippet}
     FROM ${source}
     WHERE ${matching}(? IS NULL OR videos.recorded_at >= ?)
       AND (? IS NULL OR videos.recorded_at <= ?)

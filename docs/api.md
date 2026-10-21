@@ -140,7 +140,7 @@ curl -fsS --get http://127.0.0.1:3001/api/search \
 | `limit` | Por defecto 50, entre 1 y 100 |
 | `offset` | Por defecto 0, mínimo 0 |
 
-Respuesta `{ "items": [...], "limit": 50, "offset": 0 }`. Cada item incluye ID, ruta, fecha/fuente, estado técnico, título y resumen visual. No incluye total, snippets ni puntuación. La ordenación es fecha descendente con fechas desconocidas al final, seguida por ruta.
+Respuesta `{ "items": [...], "limit": 50, "offset": 0 }`. Cada item incluye ID, ruta, fecha/fuente, estado técnico, título, resumen visual y, si `q` no está vacío, un snippet FTS con las coincidencias delimitadas por `⟦` y `⟧`. No incluye total ni puntuación. La ordenación es fecha descendente con fechas desconocidas al final, seguida por ruta.
 
 ## Personas
 

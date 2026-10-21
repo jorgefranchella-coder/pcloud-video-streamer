@@ -381,7 +381,7 @@ function renderSearchResults(items, container, query, offset, requestId, folder)
     name.textContent = item.visual_title || item.relative_path.split('/').pop();
     const detail = document.createElement('span');
     detail.className = 'block truncate text-xs text-gray-400';
-    detail.textContent = `${item.recorded_at || 'Sin fecha'} · ${item.relative_path}${item.visual_summary ? ` · ${item.visual_summary}` : ''}`;
+    detail.textContent = `${item.recorded_at || 'Sin fecha'} · ${item.relative_path}${item.snippet ? ` · Coincidencia: ${item.snippet}` : item.visual_summary ? ` · ${item.visual_summary}` : ''}`;
     button.append(name, detail);
     button.addEventListener('click', () => playVideo(item.relative_path, name.textContent));
     li.appendChild(button);
