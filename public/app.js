@@ -68,6 +68,8 @@ const closeFaceReview = document.getElementById('closeFaceReview');
 const faceInboxStatus = document.getElementById('faceInboxStatus');
 const faceInboxGrid = document.getElementById('faceInboxGrid');
 const faceLoadMore = document.getElementById('faceLoadMore');
+const faceInboxPendingMode = document.getElementById('faceInboxPendingMode');
+const faceInboxAutomaticMode = document.getElementById('faceInboxAutomaticMode');
 const faceSelectedStatus = document.getElementById('faceSelectedStatus');
 const faceNeighborGrid = document.getElementById('faceNeighborGrid');
 const faceAssignmentControls = document.getElementById('faceAssignmentControls');
@@ -104,6 +106,7 @@ let canEditPeopleDirectory = false;
 let faceInboxItems = [];
 let faceInboxCursor = 0;
 let faceInboxTotal = 0;
+let faceInboxMode = 'pending';
 let selectedFaceForReview = null;
 let selectedFaceIds = new Set();
 let searchTimer;
@@ -234,7 +237,7 @@ function renderProcessProgress(status) {
   const faceFailures = count(faceProgress.failed)
     ? ` · ${format(faceProgress.failed)} con error${faceRetryEnabled ? ' · reintentos habilitados' : ' · reintentos desactivados'}`
     : '';
-  faceProgressDetail.textContent = `${format(faceProgress.remaining)} videos pendientes${faceFailures} · ${format(faceProgress.faces?.unassigned)} rostros por revisar · ${format(faceProgress.faces?.ignored)} ignorados · ${faceProgress.model || 'modelo local no configurado'}`;
+  faceProgressDetail.textContent = `${format(faceProgress.remaining)} videos pendientes${faceFailures} · ${format(faceProgress.faces?.unassigned)} rostros por revisar · ${format(faceProgress.faces?.automatic)} asignados automáticamente · ${format(faceProgress.faces?.ignored)} ignorados · ${faceProgress.model || 'modelo local no configurado'}`;
   technicalProgressDetail.textContent = [
     `${format(technical.pending)} pendientes`,
     `${format(technical.failed)} con error`,
@@ -421,6 +424,8 @@ function setupEventListeners() {
   closePeopleDialog.addEventListener('click', () => peopleDialog.close());
   closeFaceReview.addEventListener('click', () => faceReviewDialog.close());
   faceLoadMore.addEventListener('click', () => loadFaceInbox(true));
+  faceInboxPendingMode.addEventListener('click', () => setFaceInboxMode('pending'));
+  faceInboxAutomaticMode.addEventListener('click', () => setFaceInboxMode('automatic'));
   faceAssignBtn.addEventListener('click', assignSelectedFaces);
   faceRejectBtn.addEventListener('click', rejectSelectedFace);
   facePersonSelect.addEventListener('change', () => { if (facePersonSelect.value) faceNewPersonName.value = ''; });
@@ -1114,15 +1119,34 @@ function renderFaceInbox() {
     title.textContent = faceCardTitle(face);
     const time = document.createElement('span');
     time.className = 'block text-xs text-gray-400';
-    time.textContent = `Minuto ${faceTimeLabel(face.at_seconds)}`;
+    time.textContent = faceInboxMode === 'automatic'
+      ? `${face.person_name || 'Identidad sin nombre'} · ${Number(face.assignment_similarity).toFixed(3)} · minuto ${faceTimeLabel(face.at_seconds)}`
+      : `Minuto ${faceTimeLabel(face.at_seconds)}`;
     button.append(image, title, time);
     button.addEventListener('click', () => selectFaceForReview(face));
     faceInboxGrid.appendChild(button);
   }
+  const inboxLabel = faceInboxMode === 'automatic' ? 'asignaciones automáticas' : 'rostros sin nombre';
   faceInboxStatus.textContent = faceInboxItems.length
-    ? `${faceInboxTotal.toLocaleString('es-AR')} rostros sin nombre · mostrando ${faceInboxItems.length}`
-    : 'No hay rostros pendientes en los videos ya procesados.';
+    ? `${faceInboxTotal.toLocaleString('es-AR')} ${inboxLabel} · mostrando ${faceInboxItems.length}`
+    : faceInboxMode === 'automatic' ? 'Todavía no hay asignaciones automáticas para revisar.'
+      : 'No hay rostros pendientes en los videos ya procesados.';
   faceLoadMore.classList.toggle('hidden', !faceInboxCursor || faceInboxItems.length >= faceInboxTotal);
+}
+
+async function setFaceInboxMode(mode) {
+  faceInboxMode = mode === 'automatic' ? 'automatic' : 'pending';
+  faceInboxPendingMode.setAttribute('aria-pressed', String(faceInboxMode === 'pending'));
+  faceInboxAutomaticMode.setAttribute('aria-pressed', String(faceInboxMode === 'automatic'));
+  faceInboxPendingMode.className = `rounded border px-3 py-1 text-xs ${faceInboxMode === 'pending' ? 'border-amber-500' : 'border-gray-600'}`;
+  faceInboxAutomaticMode.className = `rounded border px-3 py-1 text-xs ${faceInboxMode === 'automatic' ? 'border-amber-500' : 'border-gray-600'}`;
+  selectedFaceForReview = null;
+  selectedFaceIds = new Set();
+  faceRejectBtn.classList.toggle('hidden', faceInboxMode === 'automatic');
+  faceRejectBtn.disabled = true;
+  faceNeighborGrid.replaceChildren();
+  faceSelectedStatus.textContent = 'Elegí un rostro para revisar sus coincidencias.';
+  await loadFaceInbox(false);
 }
 
 async function loadFaceInbox(append = false) {
@@ -1135,13 +1159,14 @@ async function loadFaceInbox(append = false) {
   const params = new URLSearchParams({ limit: '18' });
   if (append && faceInboxCursor) params.set('after', String(faceInboxCursor));
   try {
-    const response = await apiFetch(`${API_BASE}/api/faces/inbox?${params}`);
+    const endpoint = faceInboxMode === 'automatic' ? 'automatic' : 'inbox';
+    const response = await apiFetch(`${API_BASE}/api/faces/${endpoint}?${params}`);
     const result = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
     faceInboxItems.push(...(result.items || []));
     faceInboxCursor = result.next_after_id || 0;
     faceInboxTotal = result.total || 0;
-    if (!append && result.progress?.remaining && !faceInboxTotal) {
+    if (faceInboxMode === 'pending' && !append && result.progress?.remaining && !faceInboxTotal) {
       faceInboxStatus.textContent = `${result.progress.remaining.toLocaleString('es-AR')} videos pendientes de procesar localmente; todavía no hay rostros para revisar.`;
       faceLoadMore.classList.add('hidden');
       return;
@@ -1192,11 +1217,12 @@ async function selectFaceForReview(face) {
   faceAssignBtn.textContent = 'Asignar identidad a 1 rostro';
   faceRejectBtn.textContent = 'Ignorar 1 rostro sin identificar';
   faceRejectBtn.disabled = false;
+  faceRejectBtn.classList.toggle('hidden', faceInboxMode === 'automatic');
   faceAssignmentControls.classList.toggle('hidden', !canEditPeopleDirectory);
   facePersonSelect.replaceChildren();
   const placeholder = document.createElement('option');
   placeholder.value = '';
-  placeholder.textContent = 'Elegir identidad';
+  placeholder.textContent = face.assignment_source === 'automatic' ? 'Elegir identidad para confirmar o corregir' : 'Elegir identidad';
   facePersonSelect.appendChild(placeholder);
   for (const person of knownPeople) {
     const option = document.createElement('option');
@@ -1204,7 +1230,9 @@ async function selectFaceForReview(face) {
     option.textContent = person.name;
     facePersonSelect.appendChild(option);
   }
-  faceSelectedStatus.textContent = `${faceCardTitle(face)} · minuto ${faceTimeLabel(face.at_seconds)} · detección ${Math.round(face.detection_score * 100)}%`;
+  faceSelectedStatus.textContent = face.assignment_source === 'automatic'
+    ? `${faceCardTitle(face)} · minuto ${faceTimeLabel(face.at_seconds)} · asignada a ${face.person_name} con similitud ${Number(face.assignment_similarity).toFixed(3)}; elegí una identidad para confirmar o corregir.`
+    : `${faceCardTitle(face)} · minuto ${faceTimeLabel(face.at_seconds)} · detección ${Math.round(face.detection_score * 100)}%`;
   faceNeighborGrid.replaceChildren();
   addFaceNeighborCard(face, { selected: true, disabled: true, description: 'Rostro elegido' });
   renderFaceInbox();
@@ -1217,8 +1245,8 @@ async function selectFaceForReview(face) {
     const suggestionHeading = document.createElement('p');
     suggestionHeading.className = 'col-span-full text-xs font-semibold text-amber-200';
     suggestionHeading.textContent = suggestions.length
-      ? `Posibles identidades (similitud ≥ ${Number(result.suggestion_threshold).toFixed(2)}). Elegir una solo completa el selector; hay que confirmar la asignación.`
-      : `No hay sugerencias por encima de ${Number(result.suggestion_threshold).toFixed(2)}. La similitud es orientativa; revisá los vecinos antes de asignar.`;
+      ? `Recomendaciones manuales (${Number(result.suggestion_threshold).toFixed(2)} a < ${Number(result.auto_assignment_threshold).toFixed(2)}). Elegir una solo completa el selector; hay que confirmar la asignación.`
+      : `No hay recomendaciones manuales entre ${Number(result.suggestion_threshold).toFixed(2)} y ${Number(result.auto_assignment_threshold).toFixed(2)}. La similitud es orientativa; revisá los vecinos antes de asignar.`;
     faceNeighborGrid.appendChild(suggestionHeading);
     for (const suggestion of suggestions) {
       const button = document.createElement('button');

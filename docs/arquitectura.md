@@ -61,7 +61,7 @@ No hay caché persistente de fotogramas, historial de versiones completas de fic
 
 ## SQLite
 
-Archivo: `DATA_DIR/videos.sqlite`. Se habilitan WAL, claves foráneas y espera de hasta 5 segundos ante bloqueo. La inicialización serializa cambios de esquema en una transacción `BEGIN IMMEDIATE` y registra migraciones numeradas hasta la versión 13. Algunas compatibilidades históricas todavía se aplican al arranque fuera de ese registro. `user_version` refleja la versión registrada; la reconstrucción inicial del índice FTS también conserva su control propio.
+Archivo: `DATA_DIR/videos.sqlite`. Se habilitan WAL, claves foráneas y espera de hasta 5 segundos ante bloqueo. La inicialización serializa cambios de esquema en una transacción `BEGIN IMMEDIATE` y registra migraciones numeradas hasta la versión 14. Algunas compatibilidades históricas todavía se aplican al arranque fuera de ese registro. `user_version` refleja la versión registrada; la reconstrucción inicial del índice FTS también conserva su control propio.
 
 | Tabla | Propósito y campos principales |
 |---|---|

@@ -24,6 +24,7 @@ Errores comunes de edición: `503` si no se configuró el token, `401` si no coi
 | `POST /api/metadata/import` | `{ "path": "..." }`; valida e importa el sidecar vecino si coincide el fingerprint y todavía no existe una revisión visual. No restaura embeddings faciales ni sobrescribe fichas; requiere edición habilitada |
 | `GET /api/metadata/evidence` | `path`, `revision`, `at_seconds`; JPEG de evidencia activa o de una identidad anterior pendiente |
 | `GET /api/faces/inbox` | `after`, `limit`; rostros sin nombre de la versión facial configurada y progreso de indexación |
+| `GET /api/faces/automatic` | `after`, `limit`; asignaciones faciales automáticas vigentes para auditar o corregir |
 | `GET /api/faces/:id/neighbors` | Busca embeddings faciales cercanos entre videos vigentes; no asigna identidades |
 | `GET /api/faces/:id/preview` | JPEG recortado generado bajo demanda desde pCloud; requiere la sesión de lectura y no se guarda en disco |
 | `POST /api/faces/assign` | `{ "face_ids": [1, 2], "person_id": 7 }` o `{ "face_ids": [1], "person_name": "Nombre" }`; confirma identidades; requiere sesión autenticada o Bearer en modo local |

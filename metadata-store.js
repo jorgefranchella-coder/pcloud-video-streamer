@@ -531,6 +531,14 @@ if (currentMigration < 13) {
   db.prepare('INSERT INTO schema_migrations (version, description) VALUES (13, ?)')
     .run('Remove embeddings retained by legacy face rejection requests');
 }
+if (currentMigration < 14) {
+  db.exec(`ALTER TABLE face_observations ADD COLUMN assignment_source TEXT;
+    ALTER TABLE face_observations ADD COLUMN assignment_similarity REAL;
+    ALTER TABLE face_observations ADD COLUMN assignment_threshold REAL;
+    UPDATE face_observations SET assignment_source = 'manual' WHERE review_status = 'confirmed';`);
+  db.prepare('INSERT INTO schema_migrations (version, description) VALUES (14, ?)')
+    .run('Record automatic face identity assignments and similarity scores');
+}
 const finalSchemaVersion = db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get().version;
 db.pragma(`user_version = ${finalSchemaVersion}`);
 db.exec('COMMIT');
@@ -909,13 +917,14 @@ function faceProgress(modelVersion, modelLabel = modelVersion) {
   const faces = db.prepare(`SELECT COUNT(*) AS total,
       SUM(CASE WHEN f.review_status = 'unassigned' THEN 1 ELSE 0 END) AS unassigned,
       SUM(CASE WHEN f.review_status = 'confirmed' THEN 1 ELSE 0 END) AS confirmed,
+      SUM(CASE WHEN f.review_status = 'confirmed' AND f.assignment_source = 'automatic' THEN 1 ELSE 0 END) AS automatic,
       SUM(CASE WHEN f.review_status = 'rejected' THEN 1 ELSE 0 END) AS ignored
     FROM face_observations f JOIN videos v ON v.id = f.video_id
     WHERE f.model_version = ? AND f.fingerprint = v.fingerprint AND v.status IN ('done', 'failed')`).get(modelVersion);
   return { model: modelLabel, ...videos, indexed: videos.indexed || 0, failed: videos.failed || 0,
     remaining: Math.max(0, videos.total - (videos.indexed || 0)),
     faces: { total: faces.total || 0, unassigned: faces.unassigned || 0,
-      confirmed: faces.confirmed || 0, ignored: faces.ignored || 0 } };
+      confirmed: faces.confirmed || 0, automatic: faces.automatic || 0, ignored: faces.ignored || 0 } };
 }
 
 function listFaceInbox({ afterId = 0, limit = 36, modelVersion }) {
@@ -931,13 +940,28 @@ function listFaceInbox({ afterId = 0, limit = 36, modelVersion }) {
   return { items, total, next_after_id: items.length ? items.at(-1).id : null };
 }
 
+function listAutoAssignedFaces({ afterId = 0, limit = 36, modelVersion }) {
+  const where = `f.model_version = ? AND f.fingerprint = v.fingerprint AND v.status IN ('done', 'failed')
+    AND f.review_status = 'confirmed' AND f.assignment_source = 'automatic'`;
+  const total = db.prepare(`SELECT COUNT(*) AS count FROM face_observations f JOIN videos v ON v.id = f.video_id WHERE ${where}`)
+    .get(modelVersion).count;
+  const items = db.prepare(`SELECT f.id, f.video_id, v.relative_path, v.visual_title, f.at_seconds,
+      f.x, f.y, f.width, f.height, f.frame_width, f.frame_height, f.detection_score,
+      f.person_id, p.name AS person_name, f.assignment_similarity, f.assignment_threshold
+    FROM face_observations f JOIN videos v ON v.id = f.video_id
+    JOIN people p ON p.id = f.person_id
+    WHERE ${where} AND f.id > ? ORDER BY f.id LIMIT ?`)
+    .all(modelVersion, afterId, Math.min(Math.max(limit, 1), 60));
+  return { items, total, next_after_id: items.length ? items.at(-1).id : null };
+}
+
 function getFaceObservation(faceId, modelVersion) {
   return db.prepare(`SELECT f.*, v.relative_path, v.fingerprint AS current_fingerprint, v.status AS video_status
     FROM face_observations f JOIN videos v ON v.id = f.video_id WHERE f.id = ? AND f.model_version = ?`)
     .get(faceId, modelVersion) || null;
 }
 
-function findFaceNeighbors(faceId, modelVersion, limit = 24, suggestionThreshold = 0.5) {
+function findFaceNeighbors(faceId, modelVersion, limit = 24, suggestionThreshold = 0.5, autoAssignmentThreshold = 0.8) {
   const reference = getFaceObservation(faceId, modelVersion);
   if (!reference || reference.review_status === 'rejected' || reference.fingerprint !== reference.current_fingerprint ||
       !['done', 'failed'].includes(reference.video_status)) return null;
@@ -975,11 +999,63 @@ function findFaceNeighbors(faceId, modelVersion, limit = 24, suggestionThreshold
   }
   nearest.sort((a, b) => b.similarity - a.similarity || a.id - b.id);
   const identitySuggestions = [...identityCandidates.values()]
-    .filter(candidate => candidate.similarity >= suggestionThreshold)
+    .filter(candidate => candidate.similarity >= suggestionThreshold && candidate.similarity < autoAssignmentThreshold)
     .sort((a, b) => b.similarity - a.similarity || a.person_name.localeCompare(b.person_name))
     .slice(0, 5);
   return { reference: { ...reference, vector: undefined }, items: nearest.slice(0, max),
-    identity_suggestions: identitySuggestions, suggestion_threshold: suggestionThreshold };
+    identity_suggestions: identitySuggestions, suggestion_threshold: suggestionThreshold,
+    auto_assignment_threshold: autoAssignmentThreshold };
+}
+
+function autoAssignFaceObservations({ modelVersion, threshold, limit = 1000 }) {
+  const assign = db.transaction(() => {
+    const references = db.prepare(`SELECT f.id, f.video_id, f.dimensions, f.vector
+      FROM face_observations f JOIN videos v ON v.id = f.video_id
+      WHERE f.model_version = ? AND f.review_status = 'unassigned'
+        AND f.fingerprint = v.fingerprint AND v.status IN ('done', 'failed')
+      ORDER BY f.id LIMIT ?`).all(modelVersion, Math.min(Math.max(limit, 1), 10000));
+    if (!references.length) return { assigned: 0, considered: 0 };
+
+    const confirmed = db.prepare(`SELECT f.id, f.dimensions, f.vector, f.person_id, p.name AS person_name
+      FROM face_observations f JOIN videos v ON v.id = f.video_id
+      JOIN people p ON p.id = f.person_id
+      WHERE f.model_version = ? AND f.review_status = 'confirmed' AND p.merged_into IS NULL
+        AND f.fingerprint = v.fingerprint AND v.status IN ('done', 'failed')`).all(modelVersion);
+    if (!confirmed.length) return { assigned: 0, considered: references.length };
+
+    const update = db.prepare(`UPDATE face_observations SET person_id = ?, review_status = 'confirmed',
+        assignment_source = 'automatic', assignment_similarity = ?, assignment_threshold = ?
+      WHERE id = ? AND model_version = ? AND review_status = 'unassigned' AND fingerprint =
+        (SELECT fingerprint FROM videos WHERE videos.id = face_observations.video_id AND status IN ('done', 'failed'))`);
+    let assigned = 0;
+    const affectedVideos = new Set();
+    for (const reference of references) {
+      const vector = faceVectorFromBlob(reference.vector, reference.dimensions);
+      if (!vector) continue;
+      const bestByPerson = new Map();
+      for (const candidate of confirmed) {
+        if (candidate.dimensions !== reference.dimensions) continue;
+        const candidateVector = faceVectorFromBlob(candidate.vector, candidate.dimensions);
+        if (!candidateVector) continue;
+        let similarity = 0;
+        for (let i = 0; i < vector.length; i += 1) similarity += vector[i] * candidateVector[i];
+        const best = bestByPerson.get(candidate.person_id);
+        if (!best || similarity > best.similarity) {
+          bestByPerson.set(candidate.person_id, { similarity });
+        }
+      }
+      const best = [...bestByPerson.entries()].sort((a, b) => b[1].similarity - a[1].similarity)[0];
+      if (!best || best[1].similarity < threshold) continue;
+      const changed = update.run(best[0], best[1].similarity, threshold, reference.id, modelVersion);
+      if (changed.changes) {
+        assigned += 1;
+        affectedVideos.add(reference.video_id);
+      }
+    }
+    refreshSearchTextForVideos([...affectedVideos]);
+    return { assigned, considered: references.length };
+  });
+  return assign.immediate();
 }
 
 function assignFaceObservations({ faceIds, personId, personName, modelVersion }) {
@@ -996,7 +1072,8 @@ function assignFaceObservations({ faceIds, personId, personName, modelVersion })
     if (!person || person.merged_into != null) throw new Error('Persona desconocida');
     let changed = 0;
     const videos = new Set();
-    const update = db.prepare(`UPDATE face_observations SET person_id = ?, review_status = 'confirmed'
+    const update = db.prepare(`UPDATE face_observations SET person_id = ?, review_status = 'confirmed',
+        assignment_source = 'manual', assignment_similarity = NULL, assignment_threshold = NULL
       WHERE id = ? AND model_version = ? AND review_status != 'rejected' AND fingerprint =
         (SELECT fingerprint FROM videos WHERE videos.id = face_observations.video_id AND status IN ('done', 'failed'))`);
     for (const faceId of faceIds) {
@@ -1706,7 +1783,7 @@ function setVideoPerson({ relativePath, expectedRevision, observationIndex, pers
 module.exports = {
   db, getByPath, getById, upsert, parseVideo, status, search, buildVisualSearchText,
   nativeMetadataSearchText, refreshSearchTextForVideos,
-  faceProgress, listFaceInbox, getFaceObservation, findFaceNeighbors, saveFaceIndex, markFaceIndexFailed, migrateFaceIndexVersion,
+  faceProgress, listFaceInbox, listAutoAssignedFaces, getFaceObservation, findFaceNeighbors, autoAssignFaceObservations, saveFaceIndex, markFaceIndexFailed, migrateFaceIndexVersion,
   assignFaceObservations, rejectFaceObservations, identifiedFacesForVideo,
   setConfirmedPeople, listPeople, identifiedPeopleForVideo, staleIdentificationsForVideo, identityHistoryForVideo,
   dismissStaleIdentification,

@@ -286,6 +286,17 @@ app.get('/api/faces/inbox', (req, res) => {
     progress: metadata.faceProgress(modelVersion, faceConfiguration().model_version), can_edit_people: Boolean(process.env.METADATA_EDIT_TOKEN) });
 });
 
+app.get('/api/faces/automatic', (req, res) => {
+  const afterId = req.query.after === undefined ? 0 : Number(req.query.after);
+  const limit = req.query.limit === undefined ? 36 : Number(req.query.limit);
+  if (!Number.isSafeInteger(afterId) || afterId < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 60) {
+    return res.status(400).json({ error: 'Invalid automatic face page' });
+  }
+  const modelVersion = faceConfiguration().index_version;
+  res.json({ ...metadata.listAutoAssignedFaces({ afterId, limit, modelVersion }),
+    progress: metadata.faceProgress(modelVersion, faceConfiguration().model_version), can_edit_people: Boolean(process.env.METADATA_EDIT_TOKEN) });
+});
+
 app.get('/api/faces/:id/neighbors', (req, res) => {
   const faceId = /^\d+$/.test(req.params.id) ? Number(req.params.id) : NaN;
   const limit = req.query.limit === undefined ? 24 : Number(req.query.limit);
@@ -293,7 +304,8 @@ app.get('/api/faces/:id/neighbors', (req, res) => {
     return res.status(400).json({ error: 'Invalid face or result limit' });
   }
   const faceConfig = faceConfiguration();
-  const result = metadata.findFaceNeighbors(faceId, faceConfig.index_version, limit, faceConfig.suggestion_threshold);
+  const result = metadata.findFaceNeighbors(faceId, faceConfig.index_version, limit,
+    faceConfig.suggestion_threshold, faceConfig.auto_assignment_threshold);
   if (!result) return res.status(404).json({ error: 'Face observation is no longer available' });
   res.json(result);
 });

@@ -6,7 +6,7 @@ const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const {
   db, withJobLock, setWorkerConfiguration, setWorkerActivity, saveFaceIndex,
-  markFaceIndexFailed, migrateFaceIndexVersion, getAutomationControl
+  markFaceIndexFailed, migrateFaceIndexVersion, getAutomationControl, autoAssignFaceObservations
 } = require('./metadata-store');
 const { faceConfiguration } = require('./config');
 
@@ -99,7 +99,9 @@ async function run() {
       enabled: true, model_version: CONFIG.index_version, model_family: CONFIG.model_version, max_videos: CONFIG.max_videos,
       sample_interval_seconds: CONFIG.sample_interval_seconds,
       max_frames_per_video: CONFIG.max_frames_per_video, max_dimension: CONFIG.max_dimension,
-      min_face_size: CONFIG.min_face_size, detection_threshold: CONFIG.detection_threshold
+      min_face_size: CONFIG.min_face_size, detection_threshold: CONFIG.detection_threshold,
+      suggestion_threshold: CONFIG.suggestion_threshold,
+      auto_assignment_threshold: CONFIG.auto_assignment_threshold
     });
     const candidates = db.prepare(`SELECT v.id, v.relative_path, v.fingerprint, v.duration_ms,
         fi.status AS face_status, fi.fingerprint AS face_fingerprint
@@ -133,10 +135,16 @@ async function run() {
         console.error(`Local face indexing failed for video ${row.id}: ${error.message}`);
       }
     }
-    setWorkerActivity(WORKER, {
-      phase: null, result: `Lote terminado: ${indexed} videos indexados, ${failed} errores`
+    const autoAssignment = autoAssignFaceObservations({
+      modelVersion: CONFIG.index_version,
+      threshold: CONFIG.auto_assignment_threshold,
+      limit: CONFIG.auto_assignment_batch_size
     });
-    console.log(JSON.stringify({ worker: WORKER, indexed, failed, selected: batch.length }));
+    setWorkerActivity(WORKER, {
+      phase: null, result: `Lote terminado: ${indexed} videos indexados, ${failed} errores, ${autoAssignment.assigned} rostros asignados automáticamente`
+    });
+    console.log(JSON.stringify({ worker: WORKER, indexed, failed, selected: batch.length,
+      auto_assigned: autoAssignment.assigned, auto_assignment_considered: autoAssignment.considered }));
   });
 }
 

@@ -73,6 +73,11 @@ function faceConfiguration() {
   const maxDimension = integerSetting('FACE_MAX_DIMENSION', 960, 320, 1920);
   const minFaceSize = integerSetting('FACE_MIN_FACE_SIZE', 48, 20, 512);
   const detectionThreshold = decimalSetting('FACE_DETECTION_THRESHOLD', 0.75, 0.1, 1);
+  const suggestionThreshold = decimalSetting('FACE_SUGGESTION_THRESHOLD', 0.5, 0, 1);
+  const autoAssignmentThreshold = decimalSetting('FACE_AUTO_ASSIGNMENT_THRESHOLD', 0.8, 0, 1);
+  if (suggestionThreshold >= autoAssignmentThreshold) {
+    throw new Error('FACE_SUGGESTION_THRESHOLD must be lower than FACE_AUTO_ASSIGNMENT_THRESHOLD');
+  }
   const indexParameters = JSON.stringify({ sampleInterval, maxFrames, maxDimension, minFaceSize, detectionThreshold });
   const indexVersion = `${modelVersion}@${crypto.createHash('sha256').update(indexParameters).digest('hex').slice(0, 12)}`;
   return {
@@ -85,7 +90,9 @@ function faceConfiguration() {
     max_dimension: maxDimension,
     min_face_size: minFaceSize,
     detection_threshold: detectionThreshold,
-    suggestion_threshold: decimalSetting('FACE_SUGGESTION_THRESHOLD', 0.5, 0, 1),
+    suggestion_threshold: suggestionThreshold,
+    auto_assignment_threshold: autoAssignmentThreshold,
+    auto_assignment_batch_size: integerSetting('FACE_AUTO_ASSIGNMENT_BATCH_SIZE', 1000, 1, 10000),
     retry_failed: booleanSetting('FACE_RETRY_FAILED'),
     video_id: process.env.FACE_VIDEO_ID === undefined || process.env.FACE_VIDEO_ID === ''
       ? null : integerSetting('FACE_VIDEO_ID', 0, 1, Number.MAX_SAFE_INTEGER)
