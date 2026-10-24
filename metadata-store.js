@@ -937,7 +937,7 @@ function getFaceObservation(faceId, modelVersion) {
     .get(faceId, modelVersion) || null;
 }
 
-function findFaceNeighbors(faceId, modelVersion, limit = 24) {
+function findFaceNeighbors(faceId, modelVersion, limit = 24, suggestionThreshold = 0.5) {
   const reference = getFaceObservation(faceId, modelVersion);
   if (!reference || reference.review_status === 'rejected' || reference.fingerprint !== reference.current_fingerprint ||
       !['done', 'failed'].includes(reference.video_status)) return null;
@@ -945,6 +945,7 @@ function findFaceNeighbors(faceId, modelVersion, limit = 24) {
   if (!vector) return null;
   const max = Math.min(Math.max(limit, 1), 60);
   const nearest = [];
+  const identityCandidates = new Map();
   const rows = db.prepare(`SELECT f.id, f.video_id, v.relative_path, v.visual_title, f.at_seconds,
       f.x, f.y, f.width, f.height, f.frame_width, f.frame_height, f.detection_score,
       f.dimensions, f.vector, f.person_id, p.name AS person_name, f.review_status
@@ -958,13 +959,27 @@ function findFaceNeighbors(faceId, modelVersion, limit = 24) {
     let score = 0;
     for (let i = 0; i < vector.length; i += 1) score += vector[i] * candidate[i];
     nearest.push({ ...row, vector: undefined, similarity: score });
+    if (row.review_status === 'confirmed' && row.person_id) {
+      const existing = identityCandidates.get(row.person_id);
+      if (!existing || score > existing.similarity) {
+        identityCandidates.set(row.person_id, {
+          person_id: row.person_id, person_name: row.person_name,
+          observation_id: row.id, similarity: score
+        });
+      }
+    }
     if (nearest.length > max * 3) {
       nearest.sort((a, b) => b.similarity - a.similarity);
       nearest.length = max;
     }
   }
   nearest.sort((a, b) => b.similarity - a.similarity || a.id - b.id);
-  return { reference: { ...reference, vector: undefined }, items: nearest.slice(0, max) };
+  const identitySuggestions = [...identityCandidates.values()]
+    .filter(candidate => candidate.similarity >= suggestionThreshold)
+    .sort((a, b) => b.similarity - a.similarity || a.person_name.localeCompare(b.person_name))
+    .slice(0, 5);
+  return { reference: { ...reference, vector: undefined }, items: nearest.slice(0, max),
+    identity_suggestions: identitySuggestions, suggestion_threshold: suggestionThreshold };
 }
 
 function assignFaceObservations({ faceIds, personId, personName, modelVersion }) {

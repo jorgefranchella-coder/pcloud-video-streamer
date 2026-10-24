@@ -85,6 +85,7 @@ function faceConfiguration() {
     max_dimension: maxDimension,
     min_face_size: minFaceSize,
     detection_threshold: detectionThreshold,
+    suggestion_threshold: decimalSetting('FACE_SUGGESTION_THRESHOLD', 0.5, 0, 1),
     retry_failed: booleanSetting('FACE_RETRY_FAILED'),
     video_id: process.env.FACE_VIDEO_ID === undefined || process.env.FACE_VIDEO_ID === ''
       ? null : integerSetting('FACE_VIDEO_ID', 0, 1, Number.MAX_SAFE_INTEGER)

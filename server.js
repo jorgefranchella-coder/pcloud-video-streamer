@@ -292,7 +292,8 @@ app.get('/api/faces/:id/neighbors', (req, res) => {
   if (!Number.isSafeInteger(faceId) || faceId < 1 || !Number.isSafeInteger(limit) || limit < 1 || limit > 60) {
     return res.status(400).json({ error: 'Invalid face or result limit' });
   }
-  const result = metadata.findFaceNeighbors(faceId, faceConfiguration().index_version, limit);
+  const faceConfig = faceConfiguration();
+  const result = metadata.findFaceNeighbors(faceId, faceConfig.index_version, limit, faceConfig.suggestion_threshold);
   if (!result) return res.status(404).json({ error: 'Face observation is no longer available' });
   res.json(result);
 });

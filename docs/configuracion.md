@@ -37,6 +37,7 @@ El proyecto no carga archivos `.env` automáticamente. Para una ejecución manua
 | `FACE_MAX_DIMENSION` | `960` | Lado máximo de fotograma para detector, entre 320 y 1920 |
 | `FACE_MIN_FACE_SIZE` | `48` | Lado mínimo de la detección facial, entre 20 y 512 px |
 | `FACE_DETECTION_THRESHOLD` | `0.75` | Confianza mínima de detección YuNet, entre 0.1 y 1 |
+| `FACE_SUGGESTION_THRESHOLD` | `0.5` | Similitud coseno mínima para mostrar identidades sugeridas; no asigna nombres automáticamente, entre 0 y 1 |
 | `FACE_RETRY_FAILED` | `0` | Si vale `1`, vuelve a procesar videos con error |
 | `FACE_VIDEO_ID` | Sin definir | ID opcional para procesar un video específico |
 | `OPENROUTER_API_URL` | `https://openrouter.ai/api/v1/chat/completions` | Visual; endpoint de inferencia, exige HTTPS y no sigue redirecciones |

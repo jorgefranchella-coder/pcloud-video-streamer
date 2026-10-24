@@ -1213,13 +1213,27 @@ async function selectFaceForReview(face) {
     const result = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
     const neighbors = result.items || [];
-    const nearestAssigned = neighbors.find(item => item.person_id);
-    if (nearestAssigned) {
-      facePersonSelect.value = String(nearestAssigned.person_id);
-      faceSelectedStatus.textContent += ` · más cercano a ${nearestAssigned.person_name} (similitud ${nearestAssigned.similarity.toFixed(3)}; requiere confirmación)`;
-    } else {
-      faceSelectedStatus.textContent += ' · sin coincidencia cercana con personas confirmadas';
+    const suggestions = result.identity_suggestions || [];
+    const suggestionHeading = document.createElement('p');
+    suggestionHeading.className = 'col-span-full text-xs font-semibold text-amber-200';
+    suggestionHeading.textContent = suggestions.length
+      ? `Posibles identidades (similitud ≥ ${Number(result.suggestion_threshold).toFixed(2)}). Elegir una solo completa el selector; hay que confirmar la asignación.`
+      : `No hay sugerencias por encima de ${Number(result.suggestion_threshold).toFixed(2)}. La similitud es orientativa; revisá los vecinos antes de asignar.`;
+    faceNeighborGrid.appendChild(suggestionHeading);
+    for (const suggestion of suggestions) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'col-span-full rounded border border-amber-700 bg-amber-950/40 px-3 py-2 text-left text-sm hover:bg-amber-900/60';
+      button.textContent = `${suggestion.person_name} · similitud ${suggestion.similarity.toFixed(3)} · usar como sugerencia`;
+      button.addEventListener('click', () => {
+        facePersonSelect.value = String(suggestion.person_id);
+        faceSelectedStatus.textContent = `${faceCardTitle(face)} · minuto ${faceTimeLabel(face.at_seconds)} · sugerencia ${suggestion.person_name} (${suggestion.similarity.toFixed(3)}); confirmar con «Asignar identidad».`;
+      });
+      faceNeighborGrid.appendChild(button);
     }
+    faceSelectedStatus.textContent += suggestions.length
+      ? ` · ${suggestions.length} sugerencia(s) requieren confirmación`
+      : ' · sin sugerencias por encima del umbral; asignación manual disponible';
     for (const neighbor of neighbors) {
       const description = `${neighbor.similarity.toFixed(3)}${neighbor.person_name ? ` · ${neighbor.person_name}` : ''}${neighbor.review_status === 'unassigned' ? ' · sin nombre' : ''}`;
       addFaceNeighborCard(neighbor, { description });
