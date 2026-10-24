@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
-const { db, getByPath, upsert, withJobLock, setWorkerConfiguration, setWorkerActivity, getAutomationControl } = require('./metadata-store');
+const { db, getByPath, upsert, withJobLock, setWorkerConfiguration, setWorkerActivity, getAutomationControl, refreshSearchTextForVideos } = require('./metadata-store');
 const { indexerConfiguration } = require('./config');
 
 const execFileAsync = promisify(execFile);
@@ -50,6 +50,122 @@ function collectDates(probe, relativePath, fileStat) {
   return { candidates, selected };
 }
 
+function parseGpsCoordinate(rawValue, directionPattern) {
+  const raw = String(rawValue).trim();
+  const direction = raw.match(directionPattern)?.[0]?.toUpperCase();
+  const directionSign = direction === 'S' || direction === 'W' ? -1 : direction ? 1 : null;
+  const value = raw.replace(/[NSEW]/gi, '').trim();
+  const rational = value.match(/^([+-]?\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)$/);
+  if (rational) {
+    const denominator = Number(rational[2]);
+    if (!denominator) return NaN;
+    const parsed = Number(rational[1]) / denominator;
+    return directionSign == null ? parsed : directionSign * Math.abs(parsed);
+  }
+  const decimal = value.match(/^([+-]?\d+(?:\.\d+)?)$/);
+  if (decimal) {
+    const parsed = Number(decimal[1]);
+    return directionSign == null ? parsed : directionSign * Math.abs(parsed);
+  }
+  const dms = value.match(/^([+-]?\d+(?:\.\d+)?)(?:[°:\s]+)(\d+(?:\.\d+)?)(?:(?:['′:\s]+)(\d+(?:\.\d+)?))?(?:["″])?$/);
+  if (!dms) return NaN;
+  const degrees = Math.abs(Number(dms[1]));
+  const minutes = Number(dms[2]);
+  const seconds = dms[3] == null ? 0 : Number(dms[3]);
+  if (minutes >= 60 || seconds >= 60) return NaN;
+  const sign = directionSign == null ? (Number(dms[1]) < 0 ? -1 : 1) : directionSign;
+  return sign * (degrees + minutes / 60 + seconds / 3600);
+}
+
+function collectLocation(probe) {
+  const tags = [];
+  for (const source of [probe.format, ...(probe.streams || [])]) {
+    for (const [key, value] of Object.entries(source.tags || {})) {
+      if (value == null || !/location|gps|iso6709/i.test(key)) continue;
+      const raw = String(value).trim();
+      if (raw) tags.push({ key: key.slice(0, 200), raw: raw.slice(0, 1000) });
+    }
+  }
+  const iso = tags.find(tag => /iso6709/i.test(tag.key) || /^[+-]\d{2,6}(?:\.\d+)?[+-]\d{3,7}(?:\.\d+)?/.test(tag.raw));
+  let coordinates = null;
+  if (iso) {
+    const match = iso.raw.match(/^([+-])(\d{2,6}(?:\.\d+)?)([+-])(\d{3,7}(?:\.\d+)?)(?:([+-])(\d+(?:\.\d+)?))?/);
+    if (match) {
+      const parseCoordinate = (sign, raw, isLatitude) => {
+        const direction = sign === '-' ? -1 : 1;
+        const degreesDigits = isLatitude ? 2 : 3;
+        const integerPart = raw.split('.', 1)[0];
+        if (raw.includes('.') && integerPart.length !== degreesDigits + 4) return direction * Number(raw);
+        if (!raw.includes('.') && raw.length <= degreesDigits) return direction * Number(raw);
+        if (integerPart.length !== degreesDigits + 4) return NaN;
+        const degrees = Number(raw.slice(0, degreesDigits));
+        const minutes = Number(raw.slice(degreesDigits, degreesDigits + 2));
+        const seconds = Number(raw.slice(degreesDigits + 2));
+        if (minutes >= 60 || seconds >= 60) return NaN;
+        return direction * (degrees + minutes / 60 + seconds / 3600);
+      };
+      const latitude = parseCoordinate(match[1], match[2], true);
+      const longitude = parseCoordinate(match[3], match[4], false);
+      if (Math.abs(latitude) <= 90 && Math.abs(longitude) <= 180) {
+        coordinates = { latitude, longitude };
+        if (match[5]) coordinates.altitude_m = Number(match[5] + match[6]);
+      }
+    }
+  }
+  let coordinateSource = iso ? `embedded:${iso.key}` : null;
+  if (!coordinates) {
+    const latitudeTag = tags.find(tag => /latitude|gpslat/i.test(tag.key));
+    const longitudeTag = tags.find(tag => /longitude|gpslon/i.test(tag.key));
+    const latitude = latitudeTag && parseGpsCoordinate(latitudeTag.raw, /[NS]/i);
+    const longitude = longitudeTag && parseGpsCoordinate(longitudeTag.raw, /[EW]/i);
+    if (Number.isFinite(latitude) && Number.isFinite(longitude) && Math.abs(latitude) <= 90 && Math.abs(longitude) <= 180) {
+      coordinates = { latitude, longitude };
+      coordinateSource = `embedded:${latitudeTag.key}+${longitudeTag.key}`;
+    }
+  }
+  const preferred = tags.find(tag => !/iso6709|latitude|gpslat|longitude|gpslon/i.test(tag.key)) || iso;
+  if (preferred) return {
+    raw: preferred.raw,
+    source: `embedded:${preferred.key}`,
+    coordinates,
+    coordinates_source: coordinateSource
+  };
+  if (coordinates) return {
+    raw: `${coordinates.latitude}, ${coordinates.longitude}`,
+    source: coordinateSource,
+    coordinates,
+    coordinates_source: coordinateSource
+  };
+  if (tags.length) {
+    const source = tags.slice(0, 4).map(tag => tag.key).join('+');
+    const raw = tags.slice(0, 4).map(tag => `${tag.key}: ${tag.raw}`).join('; ').slice(0, 1000);
+    return { raw, source: `embedded:${source}`, coordinates: null, coordinates_source: null };
+  }
+  return null;
+}
+
+function collectCaptureDevice(probe) {
+  const tags = [];
+  for (const source of [probe.format, ...(probe.streams || [])]) {
+    for (const [key, value] of Object.entries(source.tags || {})) {
+      if (value == null) continue;
+      const raw = String(value).trim().slice(0, 200);
+      if (!raw) continue;
+      if (/^(?:com\.apple\.quicktime\.)?make$|device[_ .-]?manufacturer|manufacturer/i.test(key)) {
+        tags.push({ field: 'manufacturer', raw, source: `embedded:${key.slice(0, 200)}` });
+      } else if (/^(?:com\.apple\.quicktime\.)?model$|camera[_ .-]?model|device[_ .-]?model/i.test(key)) {
+        tags.push({ field: 'model', raw, source: `embedded:${key.slice(0, 200)}` });
+      }
+    }
+  }
+  const device = {};
+  for (const field of ['manufacturer', 'model']) {
+    const tag = tags.find(item => item.field === field);
+    if (tag) device[field] = { value: tag.raw, source: tag.source };
+  }
+  return Object.keys(device).length ? device : null;
+}
+
 async function probeVideo(fullPath, relativePath, fileStat) {
   const { stdout } = await execFileAsync('ffprobe', [
     '-v', 'error', '-show_format', '-show_streams', '-of', 'json', fullPath
@@ -58,6 +174,8 @@ async function probeVideo(fullPath, relativePath, fileStat) {
   const video = (probe.streams || []).find(stream => stream.codec_type === 'video');
   const rawDuration = Number(probe.format?.duration || video?.duration);
   const dates = collectDates(probe, relativePath, fileStat);
+  const location = collectLocation(probe);
+  const capture_device = collectCaptureDevice(probe);
   return {
     duration_ms: Number.isFinite(rawDuration) ? Math.round(rawDuration * 1000) : null,
     width: video?.width || null,
@@ -67,7 +185,7 @@ async function probeVideo(fullPath, relativePath, fileStat) {
     date_precision: dates.selected ? 'day' : null,
     date_source: dates.selected?.source || null,
     date_candidates_json: JSON.stringify(dates.candidates),
-    technical_json: JSON.stringify({ format_name: probe.format?.format_name || null, streams: (probe.streams || []).map(stream => ({ type: stream.codec_type, codec: stream.codec_name })) })
+    technical_json: JSON.stringify({ format_name: probe.format?.format_name || null, streams: (probe.streams || []).map(stream => ({ type: stream.codec_type, codec: stream.codec_name })), location, capture_device })
   };
 }
 
@@ -96,7 +214,7 @@ async function scanDirectory(relativeDir, scanId, counters) {
         setWorkerActivity('indexer', { phase: 'inventory', path: normalizedPath, result: `${counters.seen} videos recorridos` });
       }
       if (INVENTORY_ONLY) continue;
-      if (previous && previous.fingerprint === fingerprint && previous.status === 'done') continue;
+      if (previous && previous.fingerprint === fingerprint && previous.status === 'done' && previous.native_metadata_version >= 1) continue;
       if (previous && previous.fingerprint === fingerprint && previous.status === 'failed' && !RETRY_FAILED) continue;
       if (MAX_PROBES > 0 && counters.attempted >= MAX_PROBES) continue;
       counters.attempted++;
@@ -107,8 +225,10 @@ async function scanDirectory(relativeDir, scanId, counters) {
         width = @width, height = @height, codec = @codec, recorded_at = @recorded_at,
         date_precision = @date_precision, date_source = @date_source,
         date_candidates_json = @date_candidates_json, technical_json = @technical_json,
+        native_metadata_version = 1,
         error = NULL, analyzed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
         WHERE relative_path = @relative_path`).run({ ...metadata, relative_path: normalizedPath });
+      refreshSearchTextForVideos([getByPath.get(normalizedPath).id]);
       counters.probed++;
     } catch (error) {
       counters.failed++;

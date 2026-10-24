@@ -14,6 +14,7 @@ Environment=PORT=3001
 Environment=NODE_ENV=production
 EnvironmentFile=-/etc/pcloud-video-metadata.env
 EnvironmentFile=-/etc/pcloud-video-access.env
+EnvironmentFile=-/etc/pcloud-video-visual.env
 ExecStart=/home/jorge/.hermes/node/bin/node server.js
 Restart=always
 RestartSec=10

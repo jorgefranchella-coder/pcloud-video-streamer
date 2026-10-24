@@ -208,6 +208,7 @@ function withJobLock(name, operation) {
 }
 
 const visualColumns = {
+  native_metadata_version: 'INTEGER NOT NULL DEFAULT 0',
   visual_status: 'TEXT',
   visual_title: 'TEXT',
   visual_summary: 'TEXT',
@@ -304,9 +305,18 @@ db.exec(`
     video_id INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
     analysis_revision TEXT NOT NULL,
     observation_index INTEGER NOT NULL,
+    association_kind TEXT NOT NULL DEFAULT 'primary',
+    duplicate_target INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (merge_id, video_id, analysis_revision, observation_index)
   );
 `);
+const mergeObservationColumns = new Set(db.prepare('PRAGMA table_info(person_merge_observations)').all().map(column => column.name));
+if (!mergeObservationColumns.has('association_kind')) {
+  db.exec("ALTER TABLE person_merge_observations ADD COLUMN association_kind TEXT NOT NULL DEFAULT 'primary'");
+}
+if (!mergeObservationColumns.has('duplicate_target')) {
+  db.exec('ALTER TABLE person_merge_observations ADD COLUMN duplicate_target INTEGER NOT NULL DEFAULT 0');
+}
 
 const identityHistorySchema = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'video_person_identity_history'").get()?.sql || '';
 if (identityHistorySchema.includes('CHECK (action IN')) {
@@ -402,6 +412,125 @@ if (currentMigration < 3) {
   db.prepare('INSERT INTO schema_migrations (version, description) VALUES (3, ?)')
     .run('Persist the per-video visual sampling plan for coverage review');
 }
+if (currentMigration < 4) {
+  db.exec(`CREATE TABLE IF NOT EXISTS video_person_observation_extra_people (
+    video_id INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+    analysis_revision TEXT NOT NULL,
+    observation_index INTEGER NOT NULL,
+    person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    confirmed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (video_id, analysis_revision, observation_index, person_id)
+  );
+  CREATE INDEX IF NOT EXISTS video_person_extra_person_idx
+    ON video_person_observation_extra_people(person_id, video_id, analysis_revision);`);
+  db.prepare('INSERT INTO schema_migrations (version, description) VALUES (4, ?)')
+    .run('Allow multiple identities on a single observed group');
+}
+if (currentMigration < 5) {
+  db.exec(`CREATE TABLE IF NOT EXISTS visual_retry_history (
+    id INTEGER PRIMARY KEY,
+    video_id INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+    fingerprint TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'web',
+    requested_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE INDEX IF NOT EXISTS visual_retry_history_video_idx ON visual_retry_history(video_id, id DESC);`);
+  db.prepare('INSERT INTO schema_migrations (version, description) VALUES (5, ?)')
+    .run('Audit manual retries of failed visual analyses');
+}
+if (currentMigration < 6) {
+  const historyColumns = new Set(db.prepare('PRAGMA table_info(video_person_identity_history)').all().map(column => column.name));
+  if (!historyColumns.has('previous_people_json')) {
+    db.exec('ALTER TABLE video_person_identity_history ADD COLUMN previous_people_json TEXT');
+  }
+  if (!historyColumns.has('people_json')) {
+    db.exec('ALTER TABLE video_person_identity_history ADD COLUMN people_json TEXT');
+  }
+  db.prepare('INSERT INTO schema_migrations (version, description) VALUES (6, ?)')
+    .run('Capture complete group identity sets in human assignment history');
+}
+if (currentMigration < 7) {
+  db.exec(`CREATE TABLE IF NOT EXISTS technical_retry_history (
+    id INTEGER PRIMARY KEY,
+    video_id INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+    fingerprint TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'web',
+    requested_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE INDEX IF NOT EXISTS technical_retry_history_video_idx ON technical_retry_history(video_id, id DESC);`);
+  db.prepare('INSERT INTO schema_migrations (version, description) VALUES (7, ?)')
+    .run('Audit manual retries of failed technical probes');
+}
+if (currentMigration < 8) {
+  db.prepare('INSERT INTO schema_migrations (version, description) VALUES (8, ?)')
+    .run('Reserved schema migration version for retired scene embedding search');
+}
+if (currentMigration < 9) {
+  db.exec(`CREATE TABLE IF NOT EXISTS face_video_indexes (
+    video_id INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+    model_version TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('done', 'failed')),
+    frames_processed INTEGER NOT NULL DEFAULT 0,
+    faces_detected INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
+    indexed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (video_id, model_version)
+  );
+  CREATE TABLE IF NOT EXISTS face_observations (
+    id INTEGER PRIMARY KEY,
+    video_id INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+    fingerprint TEXT NOT NULL,
+    model_version TEXT NOT NULL,
+    at_seconds REAL NOT NULL,
+    face_index INTEGER NOT NULL,
+    x INTEGER NOT NULL,
+    y INTEGER NOT NULL,
+    width INTEGER NOT NULL,
+    height INTEGER NOT NULL,
+    frame_width INTEGER NOT NULL,
+    frame_height INTEGER NOT NULL,
+    detection_score REAL NOT NULL,
+    dimensions INTEGER NOT NULL,
+    vector BLOB NOT NULL,
+    person_id INTEGER REFERENCES people(id) ON DELETE SET NULL,
+    review_status TEXT NOT NULL DEFAULT 'unassigned' CHECK (review_status IN ('unassigned', 'confirmed', 'rejected')),
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (video_id, fingerprint, model_version, at_seconds, face_index)
+  );
+  CREATE INDEX IF NOT EXISTS face_observations_video_idx ON face_observations(video_id, model_version, fingerprint);
+  CREATE INDEX IF NOT EXISTS face_observations_person_idx ON face_observations(person_id, video_id);
+  CREATE INDEX IF NOT EXISTS face_observations_review_idx ON face_observations(review_status, id DESC);
+  CREATE TABLE IF NOT EXISTS person_merge_face_observations (
+    merge_id INTEGER NOT NULL REFERENCES person_merge_history(id) ON DELETE CASCADE,
+    face_observation_id INTEGER NOT NULL REFERENCES face_observations(id) ON DELETE CASCADE,
+    PRIMARY KEY (merge_id, face_observation_id)
+  );`);
+  db.prepare('INSERT INTO schema_migrations (version, description) VALUES (9, ?)')
+    .run('Store local face embeddings and audited identity assignments');
+}
+if (currentMigration < 10) {
+  db.exec('DROP TABLE IF EXISTS video_visual_embeddings');
+  db.prepare("DELETE FROM worker_configuration WHERE worker = 'visual-embedding-indexer'").run();
+  db.prepare("DELETE FROM worker_runs WHERE worker = 'visual-embedding-indexer'").run();
+  db.prepare("DELETE FROM worker_run_history WHERE worker = 'visual-embedding-indexer'").run();
+  db.prepare('INSERT INTO schema_migrations (version, description) VALUES (10, ?)')
+    .run('Remove experimental scene embedding search');
+}
+if (currentMigration < 11) {
+  db.prepare('INSERT INTO schema_migrations (version, description) VALUES (11, ?)')
+    .run('Track native video metadata extraction version');
+}
+if (currentMigration < 12) {
+  db.exec(`UPDATE face_observations SET dimensions = 0, vector = X'' WHERE review_status = 'rejected'`);
+  db.prepare('INSERT INTO schema_migrations (version, description) VALUES (12, ?)')
+    .run('Remove embeddings from ignored face observations');
+}
+if (currentMigration < 13) {
+  db.exec(`UPDATE face_observations SET dimensions = 0, vector = X'' WHERE review_status = 'rejected'`);
+  db.prepare('INSERT INTO schema_migrations (version, description) VALUES (13, ?)')
+    .run('Remove embeddings retained by legacy face rejection requests');
+}
 const finalSchemaVersion = db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get().version;
 db.pragma(`user_version = ${finalSchemaVersion}`);
 db.exec('COMMIT');
@@ -430,6 +559,7 @@ const upsert = db.prepare(`
     date_source = CASE WHEN videos.fingerprint != excluded.fingerprint THEN NULL ELSE videos.date_source END,
     date_candidates_json = CASE WHEN videos.fingerprint != excluded.fingerprint THEN '[]' ELSE videos.date_candidates_json END,
     technical_json = CASE WHEN videos.fingerprint != excluded.fingerprint THEN '{}' ELSE videos.technical_json END,
+    native_metadata_version = CASE WHEN videos.fingerprint != excluded.fingerprint THEN 0 ELSE videos.native_metadata_version END,
     error = CASE WHEN videos.fingerprint != excluded.fingerprint THEN NULL ELSE videos.error END,
     visual_status = CASE WHEN videos.fingerprint != excluded.fingerprint THEN 'pending' ELSE videos.visual_status END,
     visual_revision = CASE WHEN videos.fingerprint != excluded.fingerprint THEN NULL ELSE videos.visual_revision END,
@@ -486,18 +616,31 @@ function status() {
     FROM videos WHERE visual_status = 'failed' AND visual_next_attempt_at IS NOT NULL`).get();
   const workerConfiguration = Object.fromEntries(db.prepare('SELECT worker, configuration_json, updated_at FROM worker_configuration')
     .all().map(row => [row.worker, { ...JSON.parse(row.configuration_json), updated_at: row.updated_at }]));
+  const faceConfiguration = require('./config').faceConfiguration();
+  const faceProgressValue = faceProgress(faceConfiguration.index_version, faceConfiguration.model_version);
   const utcDay = new Date().toISOString().slice(0, 10);
   const dailyRequests = db.prepare('SELECT request_count FROM visual_daily_requests WHERE utc_day = ?').get(utcDay)?.request_count || 0;
   const dailyLimit = workerConfiguration.visual?.max_visual_requests_per_day || 0;
   const monthlyLimit = workerConfiguration.visual?.max_visual_cost_per_month_usd || 0;
+  const costEstimate = getVisualCostEstimate(workerConfiguration.visual?.model || 'openrouter/free',
+    workerConfiguration.visual?.max_visual_cost_reserve_per_request_usd || 0);
+  const monthlyReserve = workerConfiguration.visual?.effective_visual_cost_reserve_per_request_usd ?? costEstimate.reserve_usd;
   const utcMonth = `${utcDay.slice(0, 7)}-01`;
   const monthlyCost = getVisualMonthlySpend();
   const providerControl = getVisualProviderControl();
   const automationControl = getAutomationControl();
-  const workerHistory = Object.fromEntries(['indexer', 'visual-analyzer'].map(worker => [worker,
+  const workerHistory = Object.fromEntries(['indexer', 'visual-analyzer', 'face-embedding-indexer'].map(worker => [worker,
     db.prepare(`SELECT id, status, started_at, heartbeat_at, finished_at, last_result, last_error
       FROM worker_run_history WHERE worker = ? ORDER BY id DESC LIMIT 10`).all(worker)
   ]));
+  const visualManualRetries = db.prepare(`SELECT visual_retry_history.id, visual_retry_history.source,
+      visual_retry_history.requested_at, videos.relative_path
+    FROM visual_retry_history JOIN videos ON videos.id = visual_retry_history.video_id
+    ORDER BY visual_retry_history.id DESC LIMIT 20`).all();
+  const technicalManualRetries = db.prepare(`SELECT technical_retry_history.id, technical_retry_history.source,
+      technical_retry_history.requested_at, videos.relative_path
+    FROM technical_retry_history JOIN videos ON videos.id = technical_retry_history.video_id
+    ORDER BY technical_retry_history.id DESC LIMIT 20`).all();
   const workerActivity = Object.fromEntries(db.prepare('SELECT * FROM worker_runs').all().map(row => {
     let alive = null;
     if (row.owner_host === os.hostname()) {
@@ -519,6 +662,7 @@ function status() {
     counts: Object.fromEntries(counts.map(row => [row.status, row.count])),
     visual_counts: Object.fromEntries(visualCounts.map(row => [row.status, row.count])),
     visual_ready_counts: Object.fromEntries(visualReadyCounts.map(row => [row.status, row.count])),
+    face_progress: faceProgressValue,
     visual_retry_wait: visualRetryWait,
     visual_daily_budget: {
       utc_day: utcDay, requests: dailyRequests, limit: dailyLimit,
@@ -526,7 +670,9 @@ function status() {
     },
     visual_monthly_budget: {
       utc_month: utcMonth.slice(0, 7), spent_usd: Number(monthlyCost.toFixed(6)),
-      limit_usd: monthlyLimit, remaining_usd: monthlyLimit ? Number(Math.max(0, monthlyLimit - monthlyCost).toFixed(6)) : null
+      limit_usd: monthlyLimit, remaining_usd: monthlyLimit ? Number(Math.max(0, monthlyLimit - monthlyCost).toFixed(6)) : null,
+      reserve_per_request_usd: monthlyReserve, reserve_sample_count: costEstimate.sample_count,
+      highest_observed_request_usd: costEstimate.highest_observed_usd
     },
     automation_control: automationControl,
     visual_provider_control: providerControl ? {
@@ -536,6 +682,8 @@ function status() {
     last_scan: scan || null,
     worker_configuration: workerConfiguration,
     worker_history: workerHistory,
+    visual_manual_retries: visualManualRetries,
+    technical_manual_retries: technicalManualRetries,
     worker_activity: workerActivity
   };
 }
@@ -564,6 +712,25 @@ function getVisualMonthlySpend() {
     }, 0);
 }
 
+function getVisualCostEstimate(model, configuredReserve = 0) {
+  const utcMonth = `${new Date().toISOString().slice(0, 7)}-01`;
+  const costs = db.prepare(`SELECT visual_usage_json FROM videos
+    WHERE visual_model = ? AND visual_analyzed_at >= ? AND visual_usage_json IS NOT NULL
+    ORDER BY visual_analyzed_at DESC LIMIT 30`).all(model, utcMonth)
+    .map(row => {
+      try {
+        const cost = Number(JSON.parse(row.visual_usage_json)?.cost);
+        return Number.isFinite(cost) && cost >= 0 ? cost : null;
+      } catch { return null; }
+    }).filter(cost => cost != null);
+  const highestObserved = costs.length ? Math.max(...costs) : 0;
+  return {
+    sample_count: costs.length,
+    highest_observed_usd: Number(highestObserved.toFixed(6)),
+    reserve_usd: Number(Math.max(configuredReserve, highestObserved * 2).toFixed(6))
+  };
+}
+
 function getAutomationControl() {
   const row = db.prepare('SELECT paused, changed_at, changed_by FROM automation_control WHERE singleton = 1').get();
   const history = db.prepare(`SELECT paused, changed_by, changed_at FROM automation_control_history
@@ -579,8 +746,8 @@ function setAutomationPaused(paused, changedBy = 'web') {
       VALUES (1, ?, ?) ON CONFLICT(singleton) DO UPDATE SET paused = excluded.paused,
       changed_at = CURRENT_TIMESTAMP, changed_by = excluded.changed_by`).run(value, changedBy);
     db.prepare('INSERT INTO automation_control_history (paused, changed_by) VALUES (?, ?)').run(value, changedBy);
-    db.prepare('DELETE FROM automation_control_history WHERE id NOT IN
-      (SELECT id FROM automation_control_history ORDER BY id DESC LIMIT 200)').run();
+    db.prepare(`DELETE FROM automation_control_history WHERE id NOT IN
+      (SELECT id FROM automation_control_history ORDER BY id DESC LIMIT 200)`).run();
   });
   change.immediate();
   return getAutomationControl();
@@ -628,12 +795,18 @@ function search({ query, from, to, personId, folder, limit, offset }) {
       AND (? IS NULL OR EXISTS (
         SELECT 1 FROM video_person_observations vpo
         WHERE vpo.video_id = videos.id AND vpo.analysis_revision = videos.visual_revision AND vpo.person_id = ?
+      ) OR EXISTS (
+        SELECT 1 FROM video_person_observation_extra_people vpe
+        WHERE vpe.video_id = videos.id AND vpe.analysis_revision = videos.visual_revision AND vpe.person_id = ?
+      ) OR EXISTS (
+        SELECT 1 FROM face_observations f WHERE f.video_id = videos.id AND f.fingerprint = videos.fingerprint
+          AND f.person_id = ? AND f.review_status = 'confirmed'
       ))
       AND (? IS NULL OR videos.relative_path = ? OR substr(videos.relative_path, 1, length(?) + 1) = ? || '/')
       AND videos.status != 'missing'
     ORDER BY ${ordering}
     LIMIT ? OFFSET ?`).all(...args, from, from, to, to, personId ?? null, personId ?? null,
-      folder ?? null, folder ?? null, folder ?? null, folder ?? null, limit, offset);
+      personId ?? null, personId ?? null, folder ?? null, folder ?? null, folder ?? null, folder ?? null, limit, offset);
   const normalizedWords = words.map(word => word.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase());
   return rows.map(row => {
     let matchAtSeconds = null;
@@ -655,14 +828,233 @@ function search({ query, from, to, personId, folder, limit, offset }) {
   });
 }
 
-function buildVisualSearchText({ events, people, places, keywords, dateClues, confirmedPeople }) {
+function faceVectorFromBlob(blob, dimensions) {
+  if (!blob || blob.length !== dimensions * Float32Array.BYTES_PER_ELEMENT) return null;
+  return new Float32Array(blob.buffer.slice(blob.byteOffset, blob.byteOffset + blob.byteLength));
+}
+
+function saveFaceIndex(videoId, fingerprint, modelVersion, result) {
+  const save = db.transaction(() => {
+    const current = db.prepare(`SELECT fingerprint FROM videos WHERE id = ? AND status = 'done'`).get(videoId);
+    if (current?.fingerprint !== fingerprint) return false;
+    db.prepare(`INSERT INTO face_video_indexes
+      (video_id, model_version, fingerprint, status, frames_processed, faces_detected, error, indexed_at)
+      VALUES (?, ?, ?, 'done', ?, ?, NULL, CURRENT_TIMESTAMP)
+      ON CONFLICT(video_id, model_version) DO UPDATE SET fingerprint = excluded.fingerprint,
+        status = 'done', frames_processed = excluded.frames_processed,
+        faces_detected = excluded.faces_detected, error = NULL, indexed_at = CURRENT_TIMESTAMP`)
+      .run(videoId, modelVersion, fingerprint, result.frames_processed, result.faces.length);
+    db.prepare(`DELETE FROM face_observations WHERE video_id = ? AND fingerprint = ?
+      AND model_version = ? AND review_status NOT IN ('confirmed', 'rejected')`)
+      .run(videoId, fingerprint, modelVersion);
+    const insert = db.prepare(`INSERT INTO face_observations
+      (video_id, fingerprint, model_version, at_seconds, face_index, x, y, width, height,
+       frame_width, frame_height, detection_score, dimensions, vector)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(video_id, fingerprint, model_version, at_seconds, face_index) DO NOTHING`);
+    for (const face of result.faces) {
+      const vector = Buffer.from(new Float32Array(face.vector).buffer);
+      insert.run(videoId, fingerprint, modelVersion, face.at_seconds, face.face_index,
+        face.x, face.y, face.width, face.height, face.frame_width, face.frame_height,
+        face.detection_score, face.vector.length, vector);
+    }
+    return true;
+  });
+  return save.immediate();
+}
+
+function markFaceIndexFailed(videoId, fingerprint, modelVersion, error) {
+  db.prepare(`INSERT INTO face_video_indexes
+      (video_id, model_version, fingerprint, status, error, indexed_at)
+    VALUES (?, ?, ?, 'failed', ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(video_id, model_version) DO UPDATE SET fingerprint = excluded.fingerprint,
+      status = 'failed', error = excluded.error, indexed_at = CURRENT_TIMESTAMP`)
+    .run(videoId, modelVersion, fingerprint, String(error).slice(0, 500));
+}
+
+function migrateFaceIndexVersion({ currentVersion, modelVersion, sampleIntervalSeconds,
+  maxFramesPerVideo, maxDimension, minFaceSize, detectionThreshold }) {
+  const migrate = db.transaction(() => {
+    const previousConfiguration = db.prepare(`SELECT configuration_json FROM worker_configuration
+      WHERE worker = 'face-embedding-indexer'`).get();
+    if (!previousConfiguration) return false;
+    let configuration;
+    try { configuration = JSON.parse(previousConfiguration.configuration_json); }
+    catch { return false; }
+    const previousVersion = configuration.model_version;
+    const previousFamily = configuration.model_family || previousVersion;
+    if (!previousVersion || previousVersion === currentVersion || previousFamily !== modelVersion ||
+        configuration.sample_interval_seconds !== sampleIntervalSeconds ||
+        configuration.max_frames_per_video !== maxFramesPerVideo ||
+        configuration.max_dimension !== maxDimension ||
+        configuration.min_face_size !== minFaceSize ||
+        configuration.detection_threshold !== detectionThreshold) return false;
+    if (db.prepare('SELECT 1 FROM face_video_indexes WHERE model_version = ? LIMIT 1').get(currentVersion) ||
+        db.prepare('SELECT 1 FROM face_observations WHERE model_version = ? LIMIT 1').get(currentVersion)) return false;
+    db.prepare('UPDATE face_video_indexes SET model_version = ? WHERE model_version = ?')
+      .run(currentVersion, previousVersion);
+    db.prepare('UPDATE face_observations SET model_version = ? WHERE model_version = ?')
+      .run(currentVersion, previousVersion);
+    return true;
+  });
+  return migrate.immediate();
+}
+
+function faceProgress(modelVersion, modelLabel = modelVersion) {
+  const videos = db.prepare(`SELECT COUNT(*) AS total,
+      SUM(CASE WHEN fi.status = 'done' AND fi.fingerprint = v.fingerprint THEN 1 ELSE 0 END) AS indexed,
+      SUM(CASE WHEN fi.status = 'failed' AND fi.fingerprint = v.fingerprint THEN 1 ELSE 0 END) AS failed
+    FROM videos v LEFT JOIN face_video_indexes fi ON fi.video_id = v.id AND fi.model_version = ?
+    WHERE v.status = 'done'`).get(modelVersion);
+  const faces = db.prepare(`SELECT COUNT(*) AS total,
+      SUM(CASE WHEN f.review_status = 'unassigned' THEN 1 ELSE 0 END) AS unassigned,
+      SUM(CASE WHEN f.review_status = 'confirmed' THEN 1 ELSE 0 END) AS confirmed,
+      SUM(CASE WHEN f.review_status = 'rejected' THEN 1 ELSE 0 END) AS ignored
+    FROM face_observations f JOIN videos v ON v.id = f.video_id
+    WHERE f.model_version = ? AND f.fingerprint = v.fingerprint AND v.status IN ('done', 'failed')`).get(modelVersion);
+  return { model: modelLabel, ...videos, indexed: videos.indexed || 0, failed: videos.failed || 0,
+    remaining: Math.max(0, videos.total - (videos.indexed || 0)),
+    faces: { total: faces.total || 0, unassigned: faces.unassigned || 0,
+      confirmed: faces.confirmed || 0, ignored: faces.ignored || 0 } };
+}
+
+function listFaceInbox({ afterId = 0, limit = 36, modelVersion }) {
+  const total = db.prepare(`SELECT COUNT(*) AS count FROM face_observations f JOIN videos v ON v.id = f.video_id
+    WHERE f.model_version = ? AND f.fingerprint = v.fingerprint AND v.status IN ('done', 'failed') AND f.review_status = 'unassigned'`)
+    .get(modelVersion).count;
+  const items = db.prepare(`SELECT f.id, f.video_id, v.relative_path, v.visual_title, f.at_seconds,
+      f.x, f.y, f.width, f.height, f.frame_width, f.frame_height, f.detection_score
+    FROM face_observations f JOIN videos v ON v.id = f.video_id
+    WHERE f.model_version = ? AND f.fingerprint = v.fingerprint AND v.status IN ('done', 'failed')
+      AND f.review_status = 'unassigned' AND f.id > ?
+    ORDER BY f.id LIMIT ?`).all(modelVersion, afterId, Math.min(Math.max(limit, 1), 60));
+  return { items, total, next_after_id: items.length ? items.at(-1).id : null };
+}
+
+function getFaceObservation(faceId, modelVersion) {
+  return db.prepare(`SELECT f.*, v.relative_path, v.fingerprint AS current_fingerprint, v.status AS video_status
+    FROM face_observations f JOIN videos v ON v.id = f.video_id WHERE f.id = ? AND f.model_version = ?`)
+    .get(faceId, modelVersion) || null;
+}
+
+function findFaceNeighbors(faceId, modelVersion, limit = 24) {
+  const reference = getFaceObservation(faceId, modelVersion);
+  if (!reference || reference.review_status === 'rejected' || reference.fingerprint !== reference.current_fingerprint ||
+      !['done', 'failed'].includes(reference.video_status)) return null;
+  const vector = faceVectorFromBlob(reference.vector, reference.dimensions);
+  if (!vector) return null;
+  const max = Math.min(Math.max(limit, 1), 60);
+  const nearest = [];
+  const rows = db.prepare(`SELECT f.id, f.video_id, v.relative_path, v.visual_title, f.at_seconds,
+      f.x, f.y, f.width, f.height, f.frame_width, f.frame_height, f.detection_score,
+      f.dimensions, f.vector, f.person_id, p.name AS person_name, f.review_status
+    FROM face_observations f JOIN videos v ON v.id = f.video_id
+    LEFT JOIN people p ON p.id = f.person_id
+    WHERE f.model_version = ? AND f.fingerprint = v.fingerprint AND v.status IN ('done', 'failed')
+      AND f.id != ? AND f.review_status != 'rejected' AND f.dimensions = ?`).iterate(modelVersion, faceId, reference.dimensions);
+  for (const row of rows) {
+    const candidate = faceVectorFromBlob(row.vector, row.dimensions);
+    if (!candidate) continue;
+    let score = 0;
+    for (let i = 0; i < vector.length; i += 1) score += vector[i] * candidate[i];
+    nearest.push({ ...row, vector: undefined, similarity: score });
+    if (nearest.length > max * 3) {
+      nearest.sort((a, b) => b.similarity - a.similarity);
+      nearest.length = max;
+    }
+  }
+  nearest.sort((a, b) => b.similarity - a.similarity || a.id - b.id);
+  return { reference: { ...reference, vector: undefined }, items: nearest.slice(0, max) };
+}
+
+function assignFaceObservations({ faceIds, personId, personName, modelVersion }) {
+  const assign = db.transaction(() => {
+    let id = personId;
+    if (personName != null) {
+      const name = String(personName).trim().replace(/\s+/g, ' ');
+      if (!name || name.length > 80) throw new Error('El nombre debe tener entre 1 y 80 caracteres');
+      db.prepare('INSERT INTO people (name) VALUES (?) ON CONFLICT(name) DO NOTHING').run(name);
+      id = db.prepare('SELECT id FROM people WHERE name = ? COLLATE NOCASE').get(name)?.id;
+    }
+    if (!Number.isSafeInteger(id) || id < 1) throw new Error('Seleccioná o creá una persona');
+    const person = db.prepare('SELECT id, name, merged_into FROM people WHERE id = ?').get(id);
+    if (!person || person.merged_into != null) throw new Error('Persona desconocida');
+    let changed = 0;
+    const videos = new Set();
+    const update = db.prepare(`UPDATE face_observations SET person_id = ?, review_status = 'confirmed'
+      WHERE id = ? AND model_version = ? AND review_status != 'rejected' AND fingerprint =
+        (SELECT fingerprint FROM videos WHERE videos.id = face_observations.video_id AND status IN ('done', 'failed'))`);
+    for (const faceId of faceIds) {
+      const result = update.run(id, faceId, modelVersion);
+      if (result.changes) {
+        changed += result.changes;
+        videos.add(db.prepare('SELECT video_id FROM face_observations WHERE id = ?').get(faceId).video_id);
+      }
+    }
+    refreshSearchTextForVideos([...videos]);
+    return { person: { id: person.id, name: person.name }, assigned: changed, video_ids: [...videos] };
+  });
+  return assign.immediate();
+}
+
+function rejectFaceObservations(faceIds, modelVersion) {
+  const reject = db.transaction(() => {
+    const update = db.prepare(`UPDATE face_observations SET review_status = 'rejected', person_id = NULL,
+        dimensions = 0, vector = X''
+      WHERE id = ? AND model_version = ? AND review_status = 'unassigned' AND fingerprint =
+        (SELECT fingerprint FROM videos WHERE videos.id = face_observations.video_id AND status IN ('done', 'failed'))`);
+    let count = 0;
+    for (const id of faceIds) count += update.run(id, modelVersion).changes;
+    return count;
+  });
+  return reject.immediate();
+}
+
+function identifiedFacesForVideo(videoId, modelVersion) {
+  return db.prepare(`SELECT p.id AS person_id, p.name, COUNT(*) AS appearances,
+      MIN(f.at_seconds) AS first_at_seconds
+    FROM face_observations f JOIN people p ON p.id = f.person_id
+      JOIN videos v ON v.id = f.video_id
+    WHERE f.video_id = ? AND f.model_version = ? AND f.fingerprint = v.fingerprint
+      AND v.status IN ('done', 'failed') AND f.review_status = 'confirmed'
+    GROUP BY p.id, p.name ORDER BY first_at_seconds, p.name`).all(videoId, modelVersion);
+}
+
+function buildVisualSearchText({ events, people, places, keywords, dateClues, confirmedPeople, location }) {
   return [
     ...events.map(item => item.description),
     ...people.map(item => item.description),
     ...places, ...keywords,
     ...dateClues.map(item => item.description),
-    ...confirmedPeople
+    ...confirmedPeople,
+    location || ''
   ].join(' ');
+}
+
+function nativeMetadataSearchText(row) {
+  try {
+    const technical = JSON.parse(row.technical_json || '{}');
+    const location = technical.location;
+    const device = technical.capture_device;
+    return [location?.raw, location?.coordinates?.latitude, location?.coordinates?.longitude,
+      device?.manufacturer?.value, device?.model?.value]
+      .filter(value => value !== undefined && value !== null && value !== '')
+      .join(' ');
+  } catch { return ''; }
+}
+
+function assignedNamesForObservationSet(videoId, revision) {
+  return db.prepare(`SELECT people.name FROM video_person_observations
+      JOIN people ON people.id = video_person_observations.person_id
+      WHERE video_id = ? AND analysis_revision = ?
+    UNION SELECT people.name FROM video_person_observation_extra_people
+      JOIN people ON people.id = video_person_observation_extra_people.person_id
+      WHERE video_id = ? AND analysis_revision = ?
+    UNION SELECT people.name FROM face_observations
+      JOIN people ON people.id = face_observations.person_id JOIN videos ON videos.id = face_observations.video_id
+      WHERE video_id = ? AND videos.fingerprint = face_observations.fingerprint
+        AND face_observations.review_status = 'confirmed'`)
+    .all(videoId, revision, videoId, revision, videoId).map(item => item.name);
 }
 
 function setConfirmedPeople(relativePath, expectedRevision, names) {
@@ -675,16 +1067,15 @@ function setConfirmedPeople(relativePath, expectedRevision, names) {
       error.code = 'STALE_VISUAL_REVISION';
       throw error;
     }
-    const assignedNames = db.prepare(`SELECT people.name FROM video_person_observations
-      JOIN people ON people.id = video_person_observations.person_id
-      WHERE video_id = ? AND analysis_revision = ?`).all(row.id, row.visual_revision).map(item => item.name);
+    const assignedNames = assignedNamesForObservationSet(row.id, row.visual_revision);
     const searchText = buildVisualSearchText({
       events: JSON.parse(row.visual_events_json),
       people: JSON.parse(row.visual_people_json),
       places: JSON.parse(row.visual_places_json),
       keywords: JSON.parse(row.visual_keywords_json),
       dateClues: JSON.parse(row.visual_date_clues_json),
-      confirmedPeople: [...names, ...assignedNames]
+      confirmedPeople: [...names, ...assignedNames],
+      location: nativeMetadataSearchText(row)
     });
     db.prepare(`UPDATE videos SET confirmed_people_json = ?, visual_search_text = ?, updated_at = CURRENT_TIMESTAMP
       WHERE id = ? AND visual_revision = ?`).run(JSON.stringify(names), searchText, row.id, expectedRevision);
@@ -694,14 +1085,18 @@ function setConfirmedPeople(relativePath, expectedRevision, names) {
 }
 
 function listPeople() {
-  return db.prepare(`SELECT people.id, people.name,
-      COUNT(video_person_observations.video_id) AS appearances,
-      COUNT(DISTINCT video_person_observations.video_id) AS videos
-    FROM people LEFT JOIN video_person_observations ON people.id = video_person_observations.person_id
-      AND video_person_observations.analysis_revision = (SELECT visual_revision FROM videos WHERE id = video_person_observations.video_id)
-      AND (SELECT status FROM videos WHERE id = video_person_observations.video_id) != 'missing'
-    WHERE people.merged_into IS NULL
-    GROUP BY people.id ORDER BY people.name COLLATE NOCASE`).all();
+  return db.prepare(`WITH person_appearances AS (
+      SELECT vpo.person_id, vpo.video_id FROM video_person_observations vpo JOIN videos v ON v.id = vpo.video_id
+        WHERE vpo.analysis_revision = v.visual_revision AND v.status != 'missing'
+      UNION ALL SELECT vpe.person_id, vpe.video_id FROM video_person_observation_extra_people vpe JOIN videos v ON v.id = vpe.video_id
+        WHERE vpe.analysis_revision = v.visual_revision AND v.status != 'missing'
+      UNION ALL SELECT f.person_id, f.video_id FROM face_observations f JOIN videos v ON v.id = f.video_id
+        WHERE f.person_id IS NOT NULL AND f.review_status = 'confirmed' AND f.fingerprint = v.fingerprint AND v.status IN ('done', 'failed')
+    )
+    SELECT people.id, people.name,
+      (SELECT COUNT(*) FROM person_appearances a WHERE a.person_id = people.id) AS appearances,
+      (SELECT COUNT(DISTINCT video_id) FROM person_appearances a WHERE a.person_id = people.id) AS videos
+    FROM people WHERE people.merged_into IS NULL ORDER BY people.name COLLATE NOCASE`).all();
 }
 
 function renamePerson(personId, newName) {
@@ -717,18 +1112,20 @@ function renamePerson(personId, newName) {
     if (duplicate) throw new Error('Ya existe una persona con ese nombre');
     db.prepare('UPDATE people SET name = ? WHERE id = ?').run(name, personId);
     const affectedVideos = db.prepare(`SELECT videos.* FROM videos
-      WHERE videos.id IN (SELECT video_id FROM video_person_observations
-        WHERE person_id = ? AND analysis_revision = videos.visual_revision)
-      AND videos.visual_status = 'done'`).all(personId);
+      WHERE videos.id IN (
+        SELECT video_id FROM video_person_observations WHERE person_id = ? AND analysis_revision = videos.visual_revision
+        UNION SELECT video_id FROM video_person_observation_extra_people
+          WHERE person_id = ? AND analysis_revision = videos.visual_revision
+        UNION SELECT video_id FROM face_observations WHERE person_id = ? AND fingerprint = videos.fingerprint)
+      AND videos.visual_status = 'done'`).all(personId, personId, personId);
     for (const row of affectedVideos) {
-      const assignedNames = db.prepare(`SELECT people.name FROM video_person_observations
-        JOIN people ON people.id = video_person_observations.person_id
-        WHERE video_id = ? AND analysis_revision = ?`).all(row.id, row.visual_revision).map(item => item.name);
+      const assignedNames = assignedNamesForObservationSet(row.id, row.visual_revision);
       const searchText = buildVisualSearchText({
         events: JSON.parse(row.visual_events_json), people: JSON.parse(row.visual_people_json),
         places: JSON.parse(row.visual_places_json), keywords: JSON.parse(row.visual_keywords_json),
         dateClues: JSON.parse(row.visual_date_clues_json),
-        confirmedPeople: [...JSON.parse(row.confirmed_people_json), ...assignedNames]
+        confirmedPeople: [...JSON.parse(row.confirmed_people_json), ...assignedNames],
+        location: nativeMetadataSearchText(row)
       });
       db.prepare('UPDATE videos SET visual_search_text = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
         .run(searchText, row.id);
@@ -742,15 +1139,15 @@ function refreshSearchTextForVideos(videoIds) {
   const uniqueIds = [...new Set(videoIds)];
   for (const videoId of uniqueIds) {
     const row = getById.get(videoId);
-    if (!row || row.status === 'missing' || row.visual_status !== 'done') continue;
-    const assignedNames = db.prepare(`SELECT people.name FROM video_person_observations
-      JOIN people ON people.id = video_person_observations.person_id
-      WHERE video_id = ? AND analysis_revision = ?`).all(row.id, row.visual_revision).map(item => item.name);
+    if (!row || row.status === 'missing') continue;
+    const assignedNames = assignedNamesForObservationSet(row.id, row.visual_revision);
+    const readArray = value => { try { return JSON.parse(value || '[]'); } catch { return []; } };
     const searchText = buildVisualSearchText({
-      events: JSON.parse(row.visual_events_json), people: JSON.parse(row.visual_people_json),
-      places: JSON.parse(row.visual_places_json), keywords: JSON.parse(row.visual_keywords_json),
-      dateClues: JSON.parse(row.visual_date_clues_json),
-      confirmedPeople: [...JSON.parse(row.confirmed_people_json), ...assignedNames]
+      events: readArray(row.visual_events_json), people: readArray(row.visual_people_json),
+      places: readArray(row.visual_places_json), keywords: readArray(row.visual_keywords_json),
+      dateClues: readArray(row.visual_date_clues_json),
+      confirmedPeople: [...readArray(row.confirmed_people_json), ...assignedNames],
+      location: nativeMetadataSearchText(row)
     });
     db.prepare('UPDATE videos SET visual_search_text = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
       .run(searchText, row.id);
@@ -776,18 +1173,45 @@ function mergePeople(sourcePersonId, targetPersonId) {
     const mergeId = Number(insertMerge.lastInsertRowid);
     const observations = db.prepare(`SELECT video_id, analysis_revision, observation_index
       FROM video_person_observations WHERE person_id = ?`).all(sourcePersonId);
+    const extraObservations = db.prepare(`SELECT source.video_id, source.analysis_revision, source.observation_index,
+        (EXISTS(SELECT 1 FROM video_person_observation_extra_people other
+          WHERE other.video_id = source.video_id AND other.analysis_revision = source.analysis_revision
+            AND other.observation_index = source.observation_index AND other.person_id = ?) OR
+         EXISTS(SELECT 1 FROM video_person_observations primary_association
+          WHERE primary_association.video_id = source.video_id AND primary_association.analysis_revision = source.analysis_revision
+          AND primary_association.observation_index = source.observation_index AND primary_association.person_id = ?)) AS duplicate_target
+      FROM video_person_observation_extra_people source WHERE person_id = ?`).all(targetPersonId, targetPersonId, sourcePersonId);
+    const faceObservations = db.prepare('SELECT id, video_id FROM face_observations WHERE person_id = ?').all(sourcePersonId);
     const saveObservation = db.prepare(`INSERT INTO person_merge_observations
-      (merge_id, video_id, analysis_revision, observation_index) VALUES (?, ?, ?, ?)`);
+      (merge_id, video_id, analysis_revision, observation_index, association_kind, duplicate_target)
+      VALUES (?, ?, ?, ?, ?, ?)`);
     for (const observation of observations) {
-      saveObservation.run(mergeId, observation.video_id, observation.analysis_revision, observation.observation_index);
+      saveObservation.run(mergeId, observation.video_id, observation.analysis_revision, observation.observation_index, 'primary', 0);
+    }
+    for (const observation of extraObservations) {
+      saveObservation.run(mergeId, observation.video_id, observation.analysis_revision, observation.observation_index,
+        'extra', observation.duplicate_target);
     }
     db.prepare('UPDATE video_person_observations SET person_id = ? WHERE person_id = ?')
       .run(targetPersonId, sourcePersonId);
+    db.prepare(`INSERT OR IGNORE INTO video_person_observation_extra_people
+      (video_id, analysis_revision, observation_index, person_id, confirmed_at)
+      SELECT video_id, analysis_revision, observation_index, ?, confirmed_at
+      FROM video_person_observation_extra_people WHERE person_id = ? AND NOT EXISTS (
+        SELECT 1 FROM video_person_observations primary_association WHERE primary_association.video_id = video_person_observation_extra_people.video_id
+          AND primary_association.analysis_revision = video_person_observation_extra_people.analysis_revision
+          AND primary_association.observation_index = video_person_observation_extra_people.observation_index
+          AND primary_association.person_id = ?)`)
+      .run(targetPersonId, sourcePersonId, targetPersonId);
+    db.prepare('DELETE FROM video_person_observation_extra_people WHERE person_id = ?').run(sourcePersonId);
+    const saveFace = db.prepare('INSERT INTO person_merge_face_observations (merge_id, face_observation_id) VALUES (?, ?)');
+    for (const face of faceObservations) saveFace.run(mergeId, face.id);
+    db.prepare('UPDATE face_observations SET person_id = ? WHERE person_id = ?').run(targetPersonId, sourcePersonId);
     db.prepare('UPDATE people SET merged_into = ? WHERE id = ?').run(targetPersonId, sourcePersonId);
-    refreshSearchTextForVideos(observations.map(item => item.video_id));
+    refreshSearchTextForVideos([...observations, ...extraObservations, ...faceObservations].map(item => item.video_id));
     return { id: mergeId, source_person_id: sourcePersonId, target_person_id: targetPersonId,
       source_name: source.name, target_name: target.name, status: 'active',
-      moved_observations: observations.length };
+      moved_observations: observations.length + extraObservations.length + faceObservations.length };
   });
   return merge.immediate();
 }
@@ -802,18 +1226,46 @@ function undoPeopleMerge(mergeId) {
     if (!source || source.merged_into !== merge.target_person_id || !target || target.merged_into != null) {
       throw new Error('No se puede deshacer: cambió el estado de alguna persona');
     }
-    const observations = db.prepare(`SELECT video_id, analysis_revision, observation_index
+    const observations = db.prepare(`SELECT video_id, analysis_revision, observation_index, association_kind, duplicate_target
       FROM person_merge_observations WHERE merge_id = ?`).all(mergeId);
+    const faceObservations = db.prepare(`SELECT face_observation_id FROM person_merge_face_observations WHERE merge_id = ?`)
+      .all(mergeId);
     const restore = db.prepare(`UPDATE video_person_observations SET person_id = ?
       WHERE video_id = ? AND analysis_revision = ? AND observation_index = ? AND person_id = ?`);
     const affectedVideos = [];
     let restored = 0;
     for (const observation of observations) {
+      if (observation.association_kind === 'extra') {
+        if (observation.duplicate_target) {
+          db.prepare(`INSERT OR IGNORE INTO video_person_observation_extra_people
+            (video_id, analysis_revision, observation_index, person_id)
+            VALUES (?, ?, ?, ?)`).run(observation.video_id, observation.analysis_revision,
+              observation.observation_index, merge.source_person_id);
+          restored++;
+          affectedVideos.push(observation.video_id);
+        } else {
+          const result = db.prepare(`UPDATE video_person_observation_extra_people SET person_id = ?
+            WHERE video_id = ? AND analysis_revision = ? AND observation_index = ? AND person_id = ?`)
+            .run(merge.source_person_id, observation.video_id, observation.analysis_revision,
+              observation.observation_index, merge.target_person_id);
+          if (result.changes) { restored += result.changes; affectedVideos.push(observation.video_id); }
+        }
+        continue;
+      }
       const result = restore.run(merge.source_person_id, observation.video_id,
         observation.analysis_revision, observation.observation_index, merge.target_person_id);
       if (result.changes) {
         restored += result.changes;
         affectedVideos.push(observation.video_id);
+      }
+    }
+    const restoreFace = db.prepare(`UPDATE face_observations SET person_id = ?
+      WHERE id = ? AND person_id = ?`);
+    for (const face of faceObservations) {
+      const result = restoreFace.run(merge.source_person_id, face.face_observation_id, merge.target_person_id);
+      if (result.changes) {
+        restored += result.changes;
+        affectedVideos.push(db.prepare('SELECT video_id FROM face_observations WHERE id = ?').get(face.face_observation_id).video_id);
       }
     }
     db.prepare('UPDATE people SET merged_into = NULL WHERE id = ?').run(merge.source_person_id);
@@ -831,11 +1283,181 @@ function listPersonMerges() {
 }
 
 function identifiedPeopleForVideo(videoId) {
-  return Object.fromEntries(db.prepare(`SELECT observation_index, people.id AS person_id, people.name
+  const assignments = db.prepare(`SELECT observation_index, people.id AS person_id, people.name
     FROM video_person_observations JOIN people ON people.id = video_person_observations.person_id
     JOIN videos ON videos.id = video_person_observations.video_id
     WHERE video_id = ? AND video_person_observations.analysis_revision = videos.visual_revision`)
-    .all(videoId).map(row => [row.observation_index, { id: row.person_id, name: row.name }]));
+    .all(videoId);
+  const extras = db.prepare(`SELECT observation_index, people.id AS person_id, people.name
+    FROM video_person_observation_extra_people JOIN people ON people.id = video_person_observation_extra_people.person_id
+    JOIN videos ON videos.id = video_person_observation_extra_people.video_id
+    WHERE video_id = ? AND video_person_observation_extra_people.analysis_revision = videos.visual_revision`)
+    .all(videoId);
+  const all = {};
+  for (const row of [...assignments, ...extras]) {
+    const list = all[row.observation_index] ||= [];
+    if (!list.some(person => person.id === row.person_id)) list.push({ id: row.person_id, name: row.name });
+  }
+  return { legacy: Object.fromEntries(Object.entries(all).map(([index, people]) => [index, people[0]])), all };
+}
+
+function importVisualSidecar(relativePath, expectedFingerprint, visual) {
+  const textField = (value, limit, field) => {
+    if (typeof value !== 'string' || value.length > limit) throw new Error(`Invalid sidecar field: ${field}`);
+    return value;
+  };
+  const evidenceList = (value, field) => {
+    if (!Array.isArray(value) || value.length > 30) throw new Error(`Invalid sidecar list: ${field}`);
+    return value.map(item => {
+      if (!item || typeof item !== 'object' || Array.isArray(item) ||
+          typeof item.description !== 'string' || item.description.length > 500 ||
+          !Number.isFinite(item.at_seconds) || item.at_seconds < 0) {
+        throw new Error(`Invalid sidecar item: ${field}`);
+      }
+      return { description: item.description.trim(), at_seconds: item.at_seconds };
+    });
+  };
+  if (!visual || typeof visual !== 'object' || Array.isArray(visual)) throw new Error('Invalid sidecar visual section');
+  const title = textField(visual.title, 120, 'visual.title');
+  const summary = textField(visual.summary, 1600, 'visual.summary');
+  const uncertainty = textField(visual.uncertainty == null ? '' : visual.uncertainty, 500, 'visual.uncertainty');
+  const peopleObserved = evidenceList(visual.people_observed, 'visual.people_observed');
+  const events = evidenceList(visual.events, 'visual.events');
+  const dateClues = evidenceList(visual.date_clues, 'visual.date_clues');
+  const simpleList = (value, field) => {
+    if (!Array.isArray(value) || value.length > 30 || value.some(item => typeof item !== 'string' || item.length > 100)) {
+      throw new Error(`Invalid sidecar list: ${field}`);
+    }
+    return value.map(item => item.trim());
+  };
+  const places = simpleList(visual.places, 'visual.places');
+  const keywords = simpleList(visual.keywords, 'visual.keywords');
+  const confirmedNames = simpleList(visual.confirmed_names, 'visual.confirmed_names')
+    .map(name => name.replace(/\s+/g, ' ')).filter(Boolean);
+  if (!Array.isArray(visual.people_confirmed) || visual.people_confirmed.length > 30) {
+    throw new Error('Invalid sidecar list: visual.people_confirmed');
+  }
+  const assignments = visual.people_confirmed.map(item => {
+    if (!item || typeof item !== 'object' || Array.isArray(item) ||
+        !Number.isInteger(item.observation_index) || item.observation_index < 0 ||
+        item.observation_index >= peopleObserved.length || !Array.isArray(item.identities) || item.identities.length > 20) {
+      throw new Error('Invalid sidecar person assignment');
+    }
+    const identities = item.identities.map(person => {
+      if (!person || typeof person.name !== 'string') throw new Error('Invalid sidecar identity');
+      const name = person.name.trim().replace(/\s+/g, ' ');
+      if (!name || name.length > 80) throw new Error('Invalid sidecar identity name');
+      return name;
+    });
+    return { observation_index: item.observation_index,
+      identities: [...new Map(identities.map(name => [name.toLocaleLowerCase(), name])).values()] };
+  });
+  if (new Set(assignments.map(item => item.observation_index)).size !== assignments.length) {
+    throw new Error('Duplicate sidecar person assignment');
+  }
+  let importedLocation = null;
+  if (visual.technical_location != null) {
+    const location = visual.technical_location;
+    if (!location || typeof location !== 'object' || Array.isArray(location) ||
+        typeof location.raw !== 'string' || location.raw.length > 1000 ||
+        typeof location.source !== 'string' || location.source.length > 200 ||
+        (location.coordinates != null && (!location.coordinates || typeof location.coordinates !== 'object' || Array.isArray(location.coordinates) ||
+          !Number.isFinite(location.coordinates.latitude) || Math.abs(location.coordinates.latitude) > 90 ||
+          !Number.isFinite(location.coordinates.longitude) || Math.abs(location.coordinates.longitude) > 180 ||
+          (location.coordinates.altitude_m != null && !Number.isFinite(location.coordinates.altitude_m)))) ||
+        (location.coordinates_source != null && (typeof location.coordinates_source !== 'string' || location.coordinates_source.length > 200))) {
+      throw new Error('Invalid sidecar location');
+    }
+    importedLocation = {
+      raw: location.raw,
+      source: location.source,
+      coordinates: location.coordinates ? {
+        latitude: location.coordinates.latitude,
+        longitude: location.coordinates.longitude,
+        ...(location.coordinates.altitude_m == null ? {} : { altitude_m: location.coordinates.altitude_m })
+      } : null,
+      coordinates_source: location.coordinates_source || null
+    };
+  }
+  let importedCaptureDevice = null;
+  if (visual.technical_capture_device != null) {
+    const device = visual.technical_capture_device;
+    if (!device || typeof device !== 'object' || Array.isArray(device)) throw new Error('Invalid sidecar capture device');
+    importedCaptureDevice = {};
+    for (const field of ['manufacturer', 'model']) {
+      if (device[field] == null) continue;
+      const item = device[field];
+      if (!item || typeof item !== 'object' || Array.isArray(item) || typeof item.value !== 'string' ||
+          item.value.length > 200 || typeof item.source !== 'string' || item.source.length > 200) {
+        throw new Error(`Invalid sidecar capture device ${field}`);
+      }
+      importedCaptureDevice[field] = { value: item.value, source: item.source };
+    }
+    if (!Object.keys(importedCaptureDevice).length) importedCaptureDevice = null;
+  }
+  const revision = crypto.randomUUID();
+  const importSidecar = db.transaction(() => {
+    const row = getByPath.get(relativePath);
+    if (!row) return { error: 'VIDEO_NOT_FOUND' };
+    if (row.fingerprint !== expectedFingerprint) return { error: 'FINGERPRINT_MISMATCH' };
+    if (row.status !== 'done') return { error: 'TECHNICAL_METADATA_REQUIRED' };
+    if (row.visual_revision || row.visual_status === 'done') return { error: 'VISUAL_METADATA_EXISTS' };
+    let technical = {};
+    try { technical = JSON.parse(row.technical_json || '{}'); } catch {}
+    const locationRestored = !technical.location && importedLocation;
+    if (locationRestored) technical.location = importedLocation;
+    const captureDeviceRestored = !technical.capture_device && importedCaptureDevice;
+    if (captureDeviceRestored) technical.capture_device = importedCaptureDevice;
+    const saveVisual = db.prepare(`UPDATE videos SET visual_status = 'done', visual_title = ?, visual_summary = ?,
+      visual_uncertainty = ?, visual_people_json = ?, visual_events_json = ?, visual_places_json = ?,
+      visual_keywords_json = ?, visual_date_clues_json = ?, visual_search_text = '', visual_evidence_json = '[]',
+      visual_sampling_json = '{}', visual_model = ?, visual_prompt_version = 'sidecar-import-v1',
+      visual_usage_json = '{}', visual_fingerprint = ?, visual_revision = ?, visual_error = NULL,
+      visual_error_class = NULL, visual_attempts = 0, visual_next_attempt_at = NULL,
+      visual_analyzed_at = CURRENT_TIMESTAMP, confirmed_people_json = ?, technical_json = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND fingerprint = ? AND visual_revision IS NULL AND COALESCE(visual_status, 'pending') != 'done'`);
+    const sourceModel = typeof visual.model === 'string' ? visual.model.slice(0, 200) : 'sidecar-import';
+    const updated = saveVisual.run(title, summary, uncertainty, JSON.stringify(peopleObserved), JSON.stringify(events),
+      JSON.stringify(places), JSON.stringify(keywords), JSON.stringify(dateClues), sourceModel, expectedFingerprint,
+      revision, JSON.stringify(confirmedNames), JSON.stringify(technical), row.id, expectedFingerprint);
+    if (updated.changes !== 1) return { error: 'VISUAL_METADATA_EXISTS' };
+
+    const personIdForName = name => {
+      db.prepare('INSERT INTO people (name) VALUES (?) ON CONFLICT(name) DO NOTHING').run(name);
+      let person = db.prepare('SELECT id, merged_into FROM people WHERE name = ? COLLATE NOCASE').get(name);
+      let remaining = 20;
+      while (person?.merged_into != null && remaining-- > 0) {
+        person = db.prepare('SELECT id, merged_into FROM people WHERE id = ?').get(person.merged_into);
+      }
+      if (!person || person.merged_into != null) throw new Error(`Could not resolve imported identity: ${name}`);
+      return person.id;
+    };
+    const savePrimary = db.prepare(`INSERT INTO video_person_observations
+      (video_id, analysis_revision, observation_index, observation_description, at_seconds, person_id)
+      VALUES (?, ?, ?, ?, ?, ?)`);
+    const saveExtra = db.prepare(`INSERT INTO video_person_observation_extra_people
+      (video_id, analysis_revision, observation_index, person_id) VALUES (?, ?, ?, ?)`);
+    const saveHistory = db.prepare(`INSERT INTO video_person_identity_history
+      (video_id, analysis_revision, observation_index, person_id, person_name, people_json, action)
+      VALUES (?, ?, ?, ?, ?, ?, 'imported')`);
+    for (const assignment of assignments) {
+      const observation = peopleObserved[assignment.observation_index];
+      const people = [...new Map(assignment.identities.map(name => {
+        const id = personIdForName(name);
+        const person = db.prepare('SELECT id, name FROM people WHERE id = ?').get(id);
+        return [person.id, person];
+      })).values()];
+      if (!people.length) continue;
+      savePrimary.run(row.id, revision, assignment.observation_index, observation.description,
+        observation.at_seconds, people[0].id);
+      for (const person of people.slice(1)) saveExtra.run(row.id, revision, assignment.observation_index, person.id);
+      saveHistory.run(row.id, revision, assignment.observation_index, people[0].id, people[0].name, JSON.stringify(people));
+    }
+    refreshSearchTextForVideos([row.id]);
+    return { revision, imported_assignments: assignments.filter(item => item.identities.length).length,
+      location_restored: Boolean(locationRestored), capture_device_restored: Boolean(captureDeviceRestored) };
+  });
+  return importSidecar.immediate();
 }
 
 function identityTokens(value) {
@@ -865,7 +1487,7 @@ function staleIdentificationsForVideo(videoId) {
   if (!video) return [];
   let currentObservations = [];
   try { currentObservations = JSON.parse(video.visual_people_json || '[]'); } catch {}
-  return db.prepare(`SELECT video_person_observations.observation_description AS description,
+  return db.prepare(`SELECT video_person_observations.video_id, video_person_observations.observation_description AS description,
       video_person_observations.at_seconds, people.id AS person_id, people.name, video_person_observations.confirmed_at,
       video_person_observations.analysis_revision, video_person_observations.observation_index
     FROM video_person_observations JOIN people ON people.id = video_person_observations.person_id
@@ -873,13 +1495,34 @@ function staleIdentificationsForVideo(videoId) {
     WHERE video_id = ? AND video_person_observations.analysis_revision != COALESCE(videos.visual_revision, '')
       AND video_person_observations.reviewed_at IS NULL
     ORDER BY video_person_observations.confirmed_at DESC, video_person_observations.observation_index`).all(videoId)
-    .map(previous => ({ ...previous, suggested_matches: suggestObservationMatches(previous, currentObservations) }));
+    .map(previous => {
+      const extraPeople = db.prepare(`SELECT people.id, people.name FROM video_person_observation_extra_people
+        JOIN people ON people.id = video_person_observation_extra_people.person_id
+        WHERE video_id = ? AND analysis_revision = ? AND observation_index = ?`)
+        .all(previous.video_id, previous.analysis_revision, previous.observation_index);
+      const identities = [...new Map([{ id: previous.person_id, name: previous.name }, ...extraPeople]
+        .map(person => [person.id, person])).values()];
+      return { ...previous, identities, person_ids: identities.map(person => person.id),
+        suggested_matches: suggestObservationMatches(previous, currentObservations) };
+    });
 }
 
 function identityHistoryForVideo(videoId) {
   return db.prepare(`SELECT id, analysis_revision, observation_index, previous_name, person_name,
-      stale_person_name, action, stale_revision, stale_observation_index, changed_at
+      previous_people_json, people_json, stale_person_name, action, stale_revision, stale_observation_index, changed_at
     FROM video_person_identity_history WHERE video_id = ? ORDER BY id DESC LIMIT 100`).all(videoId);
+}
+
+function peopleForObservation(videoId, revision, observationIndex) {
+  const primary = db.prepare(`SELECT people.id, people.name FROM video_person_observations
+    JOIN people ON people.id = video_person_observations.person_id
+    WHERE video_id = ? AND analysis_revision = ? AND observation_index = ?`)
+    .get(videoId, revision, observationIndex);
+  const extras = db.prepare(`SELECT people.id, people.name FROM video_person_observation_extra_people
+    JOIN people ON people.id = video_person_observation_extra_people.person_id
+    WHERE video_id = ? AND analysis_revision = ? AND observation_index = ?`)
+    .all(videoId, revision, observationIndex);
+  return [...(primary ? [primary] : []), ...extras];
 }
 
 function dismissStaleIdentification({ relativePath, analysisRevision, observationIndex }) {
@@ -909,7 +1552,40 @@ function dismissStaleIdentification({ relativePath, analysisRevision, observatio
   return dismiss.immediate();
 }
 
-function setVideoPerson({ relativePath, expectedRevision, observationIndex, personId, personName, staleObservation }) {
+function retryVisualAnalysis(relativePath) {
+  const retry = db.transaction(() => {
+    const row = getByPath.get(relativePath);
+    if (!row || row.status !== 'done' || row.visual_status !== 'failed') return null;
+    const changed = db.prepare(`UPDATE videos SET visual_status = 'pending', visual_attempts = 0,
+        visual_next_attempt_at = NULL, visual_error = NULL, visual_error_class = NULL, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND fingerprint = ? AND visual_status = 'failed'`).run(row.id, row.fingerprint);
+    if (changed.changes !== 1) return null;
+    const event = db.prepare('INSERT INTO visual_retry_history (video_id, fingerprint, source) VALUES (?, ?, ?)')
+      .run(row.id, row.fingerprint, 'web');
+    db.prepare(`DELETE FROM visual_retry_history WHERE id NOT IN
+      (SELECT id FROM visual_retry_history ORDER BY id DESC LIMIT 500)`).run();
+    return { queued: true, retry_id: Number(event.lastInsertRowid) };
+  });
+  return retry.immediate();
+}
+
+function retryTechnicalAnalysis(relativePath) {
+  const retry = db.transaction(() => {
+    const row = getByPath.get(relativePath);
+    if (!row || row.status !== 'failed') return null;
+    const changed = db.prepare(`UPDATE videos SET status = 'pending', error = NULL, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND fingerprint = ? AND status = 'failed'`).run(row.id, row.fingerprint);
+    if (changed.changes !== 1) return null;
+    const event = db.prepare('INSERT INTO technical_retry_history (video_id, fingerprint, source) VALUES (?, ?, ?)')
+      .run(row.id, row.fingerprint, 'web');
+    db.prepare(`DELETE FROM technical_retry_history WHERE id NOT IN
+      (SELECT id FROM technical_retry_history ORDER BY id DESC LIMIT 500)`).run();
+    return { queued: true, retry_id: Number(event.lastInsertRowid) };
+  });
+  return retry.immediate();
+}
+
+function setVideoPerson({ relativePath, expectedRevision, observationIndex, personId, personIds, personName, staleObservation }) {
   if (typeof expectedRevision !== 'string' || !expectedRevision || expectedRevision.length > 200 ||
       !Number.isInteger(observationIndex) || observationIndex < 0) return false;
   const assign = db.transaction(() => {
@@ -926,19 +1602,32 @@ function setVideoPerson({ relativePath, expectedRevision, observationIndex, pers
       FROM video_person_observations JOIN people ON people.id = video_person_observations.person_id
       WHERE video_id = ? AND analysis_revision = ? AND observation_index = ?`)
       .get(row.id, row.visual_revision, observationIndex);
+    const previousPeople = peopleForObservation(row.id, row.visual_revision, observationIndex);
     let stalePersonName = null;
+    const requestedIds = Array.isArray(personIds) ? [...new Set(personIds)] :
+      personId == null ? [] : [personId];
+    if (requestedIds.some(id => !Number.isSafeInteger(id) || id < 1)) throw new Error('Personas inválidas');
     if (personName) {
       const name = personName.trim().replace(/\s+/g, ' ');
       if (!name || name.length > 80) throw new Error('El nombre debe tener entre 1 y 80 caracteres');
       db.prepare('INSERT INTO people (name) VALUES (?) ON CONFLICT(name) DO NOTHING').run(name);
       personId = db.prepare('SELECT id FROM people WHERE name = ? COLLATE NOCASE').get(name)?.id;
     }
-    if (personId == null) {
+    if (personName) {
+      const created = db.prepare('SELECT id FROM people WHERE name = ? COLLATE NOCASE').get(personName.trim().replace(/\s+/g, ' '));
+      if (created && !requestedIds.includes(created.id)) requestedIds.push(created.id);
+    }
+    if (!requestedIds.length) {
       db.prepare('DELETE FROM video_person_observations WHERE video_id = ? AND analysis_revision = ? AND observation_index = ?')
         .run(row.id, row.visual_revision, observationIndex);
+      db.prepare('DELETE FROM video_person_observation_extra_people WHERE video_id = ? AND analysis_revision = ? AND observation_index = ?')
+        .run(row.id, row.visual_revision, observationIndex);
     } else {
-      const person = db.prepare('SELECT id, merged_into FROM people WHERE id = ?').get(personId);
-      if (!person || person.merged_into != null) throw new Error('Persona desconocida');
+      for (const id of requestedIds) {
+        const person = db.prepare('SELECT id, merged_into FROM people WHERE id = ?').get(id);
+        if (!person || person.merged_into != null) throw new Error('Persona desconocida');
+      }
+      personId = requestedIds[0];
       db.prepare(`INSERT INTO video_person_observations
         (video_id, analysis_revision, observation_index, observation_description, at_seconds, person_id)
         VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(video_id, analysis_revision, observation_index) DO UPDATE SET
@@ -946,6 +1635,11 @@ function setVideoPerson({ relativePath, expectedRevision, observationIndex, pers
           person_id = excluded.person_id, confirmed_at = CURRENT_TIMESTAMP`)
         .run(row.id, row.visual_revision, observationIndex, observations[observationIndex].description,
           observations[observationIndex].at_seconds, personId);
+      db.prepare('DELETE FROM video_person_observation_extra_people WHERE video_id = ? AND analysis_revision = ? AND observation_index = ?')
+        .run(row.id, row.visual_revision, observationIndex);
+      const saveExtra = db.prepare(`INSERT INTO video_person_observation_extra_people
+        (video_id, analysis_revision, observation_index, person_id) VALUES (?, ?, ?, ?)`);
+      for (const id of requestedIds.slice(1)) saveExtra.run(row.id, row.visual_revision, observationIndex, id);
     }
 
     if (staleObservation) {
@@ -965,40 +1659,44 @@ function setVideoPerson({ relativePath, expectedRevision, observationIndex, pers
     }
 
     const nextPerson = personId == null ? null : db.prepare('SELECT id, name FROM people WHERE id = ?').get(personId);
-    if (staleObservation || (previous?.person_id ?? null) !== (personId ?? null)) {
+    const nextPeople = requestedIds.map(id => db.prepare('SELECT id, name FROM people WHERE id = ?').get(id));
+    const assignmentChanged = JSON.stringify(previousPeople.map(person => person.id)) !== JSON.stringify(nextPeople.map(person => person.id));
+    if (staleObservation || assignmentChanged) {
       const action = staleObservation ? 'reconciled'
         : personId == null ? 'removed' : previous ? 'changed' : 'assigned';
       db.prepare(`INSERT INTO video_person_identity_history
         (video_id, analysis_revision, observation_index, previous_person_id, previous_name,
-         person_id, person_name, action, stale_revision, stale_observation_index, stale_person_name)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+         person_id, person_name, previous_people_json, people_json, action, stale_revision, stale_observation_index, stale_person_name)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .run(row.id, row.visual_revision, observationIndex, previous?.person_id ?? null, previous?.name ?? null,
-          nextPerson?.id ?? null, nextPerson?.name ?? null, action,
+          nextPerson?.id ?? null, nextPerson?.name ?? null, JSON.stringify(previousPeople), JSON.stringify(nextPeople), action,
           staleObservation?.analysisRevision ?? null, staleObservation?.observationIndex ?? null, stalePersonName);
     }
 
-    const assignedNames = db.prepare(`SELECT people.name FROM video_person_observations
-      JOIN people ON people.id = video_person_observations.person_id
-      WHERE video_id = ? AND analysis_revision = ?`).all(row.id, row.visual_revision).map(item => item.name);
+    const assignedNames = assignedNamesForObservationSet(row.id, row.visual_revision);
     const searchText = buildVisualSearchText({
       events: JSON.parse(row.visual_events_json), people: observations,
       places: JSON.parse(row.visual_places_json), keywords: JSON.parse(row.visual_keywords_json),
       dateClues: JSON.parse(row.visual_date_clues_json),
-      confirmedPeople: [...JSON.parse(row.confirmed_people_json), ...assignedNames]
+      confirmedPeople: [...JSON.parse(row.confirmed_people_json), ...assignedNames],
+      location: nativeMetadataSearchText(row)
     });
     db.prepare('UPDATE videos SET visual_search_text = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
       .run(searchText, row.id);
-    return personId == null ? null : db.prepare('SELECT id, name FROM people WHERE id = ?').get(personId);
+    return requestedIds.map(id => db.prepare('SELECT id, name FROM people WHERE id = ?').get(id));
   });
   return assign();
 }
 
 module.exports = {
   db, getByPath, getById, upsert, parseVideo, status, search, buildVisualSearchText,
+  nativeMetadataSearchText, refreshSearchTextForVideos,
+  faceProgress, listFaceInbox, getFaceObservation, findFaceNeighbors, saveFaceIndex, markFaceIndexFailed, migrateFaceIndexVersion,
+  assignFaceObservations, rejectFaceObservations, identifiedFacesForVideo,
   setConfirmedPeople, listPeople, identifiedPeopleForVideo, staleIdentificationsForVideo, identityHistoryForVideo,
   dismissStaleIdentification,
-  setVideoPerson, renamePerson, mergePeople, undoPeopleMerge, listPersonMerges,
+  importVisualSidecar, setVideoPerson, retryVisualAnalysis, retryTechnicalAnalysis, renamePerson, mergePeople, undoPeopleMerge, listPersonMerges,
   withJobLock, setWorkerConfiguration, setWorkerActivity, reserveVisualDailyRequest,
-  getVisualProviderControl, setVisualProviderControl, clearVisualProviderControl, getVisualMonthlySpend,
+  getVisualProviderControl, setVisualProviderControl, clearVisualProviderControl, getVisualMonthlySpend, getVisualCostEstimate,
   getAutomationControl, setAutomationPaused
 };

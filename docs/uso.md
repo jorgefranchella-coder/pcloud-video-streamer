@@ -4,7 +4,13 @@
 
 ## Ver un video y su ficha
 
-Abrir las carpetas del panel lateral y seleccionar un video. En móvil, el botón de menú abre el navegador de carpetas. La ficha aparece debajo del reproductor: duración, resolución, códec, fecha sugerida y evidencia de esa fecha. Si ya existe análisis visual, también aparecen título, resumen, personas observadas, momentos y lugares.
+Abrir las carpetas del panel lateral y seleccionar un video. En móvil, el botón de menú abre el navegador de carpetas. La ficha aparece debajo del reproductor: duración, resolución, códec, fecha sugerida y evidencia de esa fecha. Si el archivo incluye tags de ubicación o de fabricante/modelo de cámara reconocidos por ffprobe, se muestran sus valores y origen. Si ya existe análisis visual, también aparecen título, resumen, personas observadas, momentos y lugares.
+
+La ubicación y el dispositivo solo aparecen si esos tags estaban guardados en el propio archivo. Si la ubicación incluye coordenadas, la aplicación muestra un enlace opcional a OpenStreetMap; al abrirlo, ese sitio recibe las coordenadas. No se convierten automáticamente en ciudad o dirección. SQLite conserva estos datos para búsqueda; la aplicación no escribe tags en el video.
+
+Para guardar una copia portable de la ficha, usá «Exportar ficha JSON junto al video». La acción requiere edición habilitada y crea `<nombre-del-video>.metadata.json` en la misma carpeta. Incluye la ficha vigente, el fingerprint del video y las identidades confirmadas. Si el sidecar ya existe, no se sobrescribe; la exportación no modifica el video original.
+
+Cuando el video no tiene una revisión visual local, aparece «Importar ficha JSON». La aplicación solo lee el sidecar vecino, si es un JSON reconocido menor a 2 MiB y su ruta y fingerprint de tamaño/mtime coinciden con el video actual. Ese fingerprint no es un hash del contenido. La importación no reemplaza fichas ni identidades locales existentes. Restaura identidades de las observaciones narrativas y ubicación/dispositivo si faltan localmente; los resúmenes de rostros se conservan en el sidecar, pero no se asignan sin volver a crear y revisar los embeddings localmente.
 
 En móvil se desplaza la página completa. En escritorio se desplaza el área principal; la ficha no tiene su propio panel de scroll limitado. Pulsar una observación o un momento del análisis salta al segundo de su fotograma.
 
@@ -12,9 +18,9 @@ Un video puede reproducirse aunque todavía no esté inventariado. Una extensió
 
 ## Buscar
 
-El campo de búsqueda consulta nombres de archivo, título, resumen, descripciones, lugares, palabras clave y nombres confirmados. La búsqueda usa prefijos de palabras y exige que coincidan todas las palabras consideradas, hasta ocho. No es una búsqueda semántica: una frase parecida o un sinónimo pueden no coincidir.
+La búsqueda consulta nombres de archivo, título, resumen, descripciones, lugares, palabras clave, nombres confirmados y tags de ubicación presentes en el archivo. Usa prefijos de palabras y exige que coincidan todas las palabras consideradas, hasta ocho. Los resultados pueden filtrarse por fecha, persona o carpeta. La descripción narrativa usa el modelo remoto configurado y las identidades faciales se procesan localmente. La aplicación no convierte coordenadas en nombres de ciudades.
 
-Los filtros Desde/Hasta usan `recorded_at`, inclusive. Con un filtro de fecha, los videos sin fecha sugerida quedan fuera. La interfaz muestra 50 resultados por página y permite cargar más. El directorio «Personas identificadas» coloca el nombre elegido en la búsqueda textual: todavía no aplica un filtro exacto por identificador de persona.
+Los filtros Desde/Hasta usan `recorded_at`, inclusive. Con un filtro de fecha, los videos sin fecha sugerida quedan fuera. La interfaz muestra 50 resultados por página y permite cargar más. El directorio «Personas identificadas» filtra por el ID elegido, incluso cuando hay personas con nombres iguales.
 
 ## Interpretar fechas y descripciones
 
@@ -24,15 +30,26 @@ Las descripciones se basan en un máximo de cuatro imágenes. Pueden omitir pers
 
 ## Dar nombre a las personas
 
+### Identificar rostros localmente
+
+Cuando el indexador facial está instalado y activo, «Revisar rostros sin nombre» abre la bandeja de detecciones. Elegí un rostro para buscar los embeddings más cercanos de otros videos. La persona confirmada más cercana se muestra como sugerencia, con su similitud; no se asigna automáticamente.
+
+Seleccioná una persona existente o escribí un nombre nuevo. Marcá los vecinos que consideres de la misma persona y pulsá «Asignar identidad». La operación confirma únicamente el rostro base y los vecinos seleccionados. Si una persona no te interesa, marcá su rostro y las apariciones similares que quieras excluir y pulsá «Ignorar». Se eliminan los embeddings guardados y esas detecciones no vuelven a la bandeja al reindexar el mismo video, fingerprint y versión del índice; las identidades confirmadas no se pueden ignorar desde este control. La decisión se aplica a las apariciones seleccionadas: otros videos o fotogramas no seleccionados deben ignorarse por separado. Las identidades confirmadas aparecen en la ficha del video, el directorio y la búsqueda exacta por persona.
+
+El detector y los embeddings se ejecutan en el servidor. Las miniaturas se vuelven a extraer del video cuando abrís la bandeja, se muestran en la sesión autenticada y no se guardan ni se envían a OpenRouter. La descripción narrativa del video sigue usando el proveedor/modelo remoto configurado. Las caras pequeñas, ocultas o de perfil pueden pasar inadvertidas; revisá cada grupo antes de asignarlo.
+
+Si la bandeja está vacía, puede no haber videos procesados aún. El progreso «Rostros procesados localmente» muestra cuántos videos faltan y cuántas detecciones esperan revisión.
+
 1. Abrir un video con ficha visual y ubicar «Personas observadas».
 2. Pulsar la descripción para ir al instante correspondiente.
-3. Elegir un nombre existente o «Crear persona…» y escribirlo.
-4. La primera edición pide el token del servidor. Queda en memoria hasta recargar o cerrar la página.
-5. Para quitar una asociación, elegir «Sin identificar».
+3. Elegir una o más identidades en la lista. Para seleccionar varias, mantener Ctrl (Windows/Linux) o ⌘ (macOS), y luego pulsar «Guardar selección».
+4. Usar «Crear persona y agregar» para sumar un nombre nuevo a la selección actual.
+5. Dejar la lista sin selecciones para quitar todas las identidades de esa observación.
+6. Con el acceso a la biblioteca habilitado, la misma sesión autoriza las ediciones; no se pide un token adicional al cambiar personas.
 
-El servidor necesita `METADATA_EDIT_TOKEN`. Si no está configurado, la ficha informa que la edición no está habilitada. La clave de OpenRouter y el token de edición son credenciales diferentes.
+El servidor necesita `METADATA_EDIT_TOKEN` para habilitar la edición. Cuando también está configurado `ACCESS_TOKEN`, iniciás sesión una vez y la misma sesión permite editar. La sesión dura 30 días por defecto; si se limpia la cookie, se usa navegación privada o vence, hay que iniciar sesión de nuevo. Sin `ACCESS_TOKEN`, el modo local conserva el token Bearer de edición.
 
-Una observación puede describir un grupo; la interfaz actual permite un único nombre por observación. No hay comparación facial, agrupamiento automático ni propagación de identidad a otros videos. Al regenerar la ficha, las asociaciones anteriores no se aplican automáticamente; la interfaz permite elegir manualmente una observación de la ficha nueva y conserva constancia de la revisión. El catálogo de nombres permanece.
+Una observación narrativa puede describir un grupo y guardar varias identidades; la bandeja facial trabaja con detecciones individuales y permite revisar vecinos por similitud. No hay asignación automática ni umbral que confirme identidades por sí solo: la similitud solo ayuda a ordenar candidatos y puede producir falsos positivos. La asignación facial queda asociada a la detección y a la versión del video; si el archivo cambia, esa detección deja de contar como vigente y debe revisarse de nuevo. El catálogo de nombres permanece.
 
 ## Leer el progreso
 
@@ -40,6 +57,7 @@ Una observación puede describir un grupo; la interfaz actual permite un único 
 |---|---|
 | Inventario técnico | Fichas técnicas terminadas / videos presentes en el índice, excluyendo `missing` |
 | Fichas visuales | Fichas visuales terminadas / videos cuyo análisis técnico está listo |
+| Rostros procesados localmente | Videos con embeddings faciales vigentes / videos técnicamente listos; también muestra cuántos rostros esperan revisión |
 | En cola visual | Elegibles con `visual_status` pendiente o nulo |
 | En proceso visual | Registros marcados `running` |
 | Esperando inventario técnico | Registros con estado técnico `pending` |

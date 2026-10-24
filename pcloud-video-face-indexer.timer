@@ -1,0 +1,10 @@
+[Unit]
+Description=Continue bounded local face indexing batches
+
+[Timer]
+OnBootSec=30min
+OnUnitInactiveSec=30min
+Unit=pcloud-video-face-indexer.service
+
+[Install]
+WantedBy=timers.target

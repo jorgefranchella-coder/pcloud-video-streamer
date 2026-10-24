@@ -7,13 +7,15 @@ Documentación revisada contra el código el **21 de octubre de 2026**. Las cifr
 ## Qué hace hoy
 
 - Navegación por carpetas y reproducción HTML5 con peticiones HTTP Range.
-- Inventario incremental en SQLite y extracción de duración, resolución, formato y fechas con `ffprobe`.
+- Inventario incremental en SQLite y extracción de duración, resolución, formato, fechas, ubicación y tags de cámara/dispositivo presentes en los archivos con `ffprobe`.
+- Exportación e importación manual de fichas mediante sidecars JSON junto al video, sin reescribir el original y verificando su fingerprint.
 - Análisis de hasta cuatro fotogramas mediante **OpenRouter Chat Completions**, con una ficha en español y referencias temporales.
 - Búsqueda textual FTS5, filtros por fecha sugerida, persona exacta o carpeta, y paginación.
-- Catálogo de personas: asignación manual de un nombre a cada observación, integrada en el streamer.
-- Panel de progreso técnico y visual, con lotes recientes y contador diario de solicitudes del proveedor.
+- Identificación facial local con YuNet + SFace: embeddings en SQLite, sugerencias de vecinos, asignación grupal y opción de ignorar detecciones sin conservar sus embeddings.
+- El modelo de OpenRouter crea la descripción narrativa; los fotogramas para reconocimiento de personas se procesan en el servidor y nunca se envían al proveedor.
+- Panel de progreso técnico, visual y de rostros locales, con lotes recientes y contador diario de solicitudes del proveedor.
 
-El análisis visual no transcribe audio, no reconoce identidades automáticamente y no examina cada instante del video. La reproducción depende de los códecs que soporte el navegador; no hay transcodificación. El analizador visual trabaja por lotes manuales por defecto; el repositorio incluye un temporizador opcional que no queda habilitado durante la instalación.
+El análisis narrativo no transcribe audio ni examina cada instante del video. Las coincidencias faciales son sugerencias; el usuario confirma cada grupo. La reproducción depende de los códecs que soporte el navegador; no hay transcodificación. Los indexadores visual y facial tienen temporizadores independientes y optativos.
 
 ## Documentación
 
@@ -62,12 +64,17 @@ metadata-store.js                SQLite, esquema, estados, búsquedas y personas
 config.js                        Validación de configuración de los trabajadores
 indexer.js                       Inventario y fichas técnicas
 visual-analyzer.js               Fotogramas, petición a OpenRouter y persistencia visual
+face-indexer.js                  Detección local YuNet, embeddings SFace e índice facial
+scripts/extract-face-embeddings.py Procesamiento local de fotogramas sin persistir recortes
+scripts/setup-face-runtime.sh    Virtualenv, modelos locales y verificación SHA-256
 public/index.html                Interfaz y estilos
-public/app.js                    Navegación, progreso, fichas, búsqueda y edición de identidades
+public/app.js                    Navegación, progreso, fichas, búsqueda y revisión de identidades
 pcloud-video-streamer.service    Servidor HTTP
 pcloud-video-indexer.service     Lote técnico
 pcloud-video-indexer.timer       Ejecución técnica periódica
 pcloud-video-visual.service      Lote visual manual
+pcloud-video-face-indexer.service Indexación facial local
+pcloud-video-face-indexer.timer   Procesamiento facial periódico optativo
 rclone-pcloud.service            Montaje remoto
 Dockerfile                      Imagen con Node y ffmpeg
 package.json / package-lock.json Dependencias y scripts npm

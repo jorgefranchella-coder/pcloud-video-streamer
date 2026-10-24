@@ -1,0 +1,29 @@
+[Unit]
+Description=Local pCloud video face detection and embedding indexer
+After=network-online.target rclone-pcloud.service
+Wants=network-online.target rclone-pcloud.service
+
+[Service]
+Type=oneshot
+TimeoutStartSec=0
+User=jorge
+Group=jorge
+WorkingDirectory=/home/jorge/orca/workspaces/Video-Home/meta-data-videos
+Environment="VIDEO_ROOT=/mnt/pcloud/My Videos"
+Environment=DATA_DIR=/home/jorge/orca/workspaces/Video-Home/meta-data-videos/data
+Environment=FACE_INDEXING_ENABLED=1
+Environment=FACE_PYTHON=/home/jorge/orca/workspaces/Video-Home/meta-data-videos/data/face-runtime/bin/python
+Environment=FACE_MODEL_DIR=/home/jorge/orca/workspaces/Video-Home/meta-data-videos/data/models/faces
+Environment=FACE_MAX_VIDEOS=10
+Environment=FACE_SAMPLE_INTERVAL_SECONDS=20
+Environment=FACE_MAX_FRAMES_PER_VIDEO=24
+Environment=FACE_MAX_DIMENSION=960
+Environment=FACE_MIN_FACE_SIZE=48
+Environment=FACE_DETECTION_THRESHOLD=0.75
+Environment=FACE_RETRY_FAILED=0
+Nice=10
+CPUQuota=50%
+MemoryMax=768M
+ExecStart=/home/jorge/.hermes/node/bin/node face-indexer.js
+StandardOutput=journal
+StandardError=journal
