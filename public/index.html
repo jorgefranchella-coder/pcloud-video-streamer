@@ -3,34 +3,22 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>pCloud Video Streamer</title>
+  <title>Archivo · Mis vídeos</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-  <style>
-    * { font-family: 'Inter', sans-serif; }
-    .video-container { aspect-ratio: 16/9; flex: 0 0 auto; }
-    .folder-tree { max-height: 60vh; overflow-y: auto; }
-    body { overflow-x: hidden; }
-    @media (min-width: 1024px) {
-      .main-content { min-height: 0; overflow-y: auto; overscroll-behavior-y: contain; }
-      .video-container { max-height: 65vh; }
-    }
-  </style>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
 </head>
-<body class="bg-gray-900 text-gray-100 min-h-screen">
+<body class="min-h-screen">
   <div class="app-shell flex min-h-dvh lg:h-dvh lg:overflow-hidden">
     <!-- Sidebar: Folder Browser -->
-    <aside id="sidebar" class="h-full w-72 bg-gray-800 border-r border-gray-700 flex flex-col hidden lg:flex">
+    <aside id="sidebar" class="h-full w-72 border-r flex flex-col hidden lg:flex">
       <div class="p-4 border-b border-gray-700">
-        <h1 class="text-xl font-semibold flex items-center gap-2">
-          <svg class="w-6 h-6 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 4v16M17 4v16M3 8h18M3 16h18M3 12h18"/>
-          </svg>
-          Mis Vídeos
-        </h1>
-        <p class="text-xs text-gray-500 mt-1" id="currentPathDisplay">/</p>
+        <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div>
+        <div class="brand-copy"><span class="brand-eyebrow">BIBLIOTECA PERSONAL</span><h1>Archivo</h1></div>
+        <p class="text-xs mt-1" id="currentPathDisplay">/</p>
+        <p class="sidebar-label">EXPLORAR</p>
         <input id="searchInput" type="search" placeholder="Buscar personas, escenas..." aria-label="Buscar videos" class="mt-3 w-full px-3 py-2 rounded bg-gray-900 border border-gray-600 text-sm text-white" />
         <div class="grid grid-cols-2 gap-2 mt-2 text-xs text-gray-400">
           <label>Desde<input id="searchFrom" type="date" class="w-full mt-1 rounded bg-gray-900 border border-gray-600 text-white" /></label>
@@ -38,6 +26,7 @@
         </div>
         <label class="mt-2 flex items-center gap-2 text-xs text-gray-400"><input id="searchWithinFolder" type="checkbox" disabled />Buscar solo en esta carpeta</label>
         <button id="peopleDirectoryBtn" class="mt-3 w-full px-3 py-2 text-left text-sm rounded bg-gray-700 hover:bg-gray-600">Personas identificadas</button>
+        <button id="faceReviewBtn" class="mt-2 w-full px-3 py-2 text-left text-sm rounded bg-gray-700 hover:bg-gray-600">Revisar rostros sin nombre</button>
       </div>
       
       <nav class="flex-1 p-3 folder-tree" id="folderTree" aria-label="Carpetas y videos">
@@ -52,7 +41,7 @@
     </aside>
 
     <!-- Mobile sidebar toggle -->
-    <button id="mobileMenuBtn" type="button" class="lg:hidden fixed top-4 left-4 z-50 p-2 bg-gray-800 rounded-lg border border-gray-700 shadow-lg" aria-label="Abrir navegación" aria-controls="mobileSidebar" aria-expanded="false">
+    <button id="mobileMenuBtn" type="button" class="lg:hidden fixed top-4 left-4 z-50 p-2 rounded-lg border shadow-lg" aria-label="Abrir navegación" aria-controls="mobileSidebar" aria-expanded="false">
       <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
       </svg>
@@ -60,22 +49,22 @@
 
     <!-- Main Content: Video Player -->
     <main class="main-content flex min-w-0 flex-1 flex-col lg:h-full">
-      <header class="sticky top-0 z-20 shrink-0 p-4 pl-16 lg:pl-4 border-b border-gray-700 bg-gray-800">
-        <div class="flex items-center justify-between">
-          <h2 id="videoTitle" class="text-lg font-medium truncate max-w-md" aria-live="polite" aria-atomic="true">Selecciona un vídeo para reproducir</h2>
+      <header class="sticky top-0 z-20 shrink-0 p-4 pl-16 lg:pl-4 border-b">
+        <div class="flex items-center justify-between gap-4">
+          <div class="min-w-0"><p class="main-eyebrow">TU COLECCIÓN</p><h2 id="videoTitle" class="text-lg font-medium truncate max-w-md" aria-live="polite" aria-atomic="true">Selecciona un vídeo para reproducir</h2></div>
           <div class="flex items-center gap-2">
             <span id="videoInfo" class="text-sm text-gray-500 hidden"></span>
           </div>
         </div>
       </header>
 
-      <section id="processProgress" class="shrink-0 border-b border-gray-700 bg-gray-800 px-4 py-3" aria-label="Progreso de las fichas">
-        <div class="mx-auto max-w-5xl">
+      <section id="processProgress" class="shrink-0 border-b px-4 py-3" aria-label="Progreso de las fichas">
+        <div class="progress-inner">
           <div class="mb-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-            <h3 class="text-sm font-semibold">Progreso de las fichas</h3>
+            <h3 class="text-sm font-semibold">Estado de la biblioteca</h3>
             <span id="progressUpdated" class="text-xs text-gray-400">Cargando estado…</span>
           </div>
-          <div class="grid gap-3 sm:grid-cols-2">
+          <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
             <div>
               <div class="mb-1 flex justify-between gap-2 text-xs">
                 <span class="text-gray-300">Inventario técnico</span>
@@ -96,13 +85,31 @@
               </div>
               <p id="visualProgressDetail" class="mt-1 text-xs text-gray-500">Esperando datos</p>
             </div>
+            <div>
+              <div class="mb-1 flex justify-between gap-2 text-xs">
+                <span class="text-gray-300">Rostros procesados localmente</span>
+                <span id="faceProgressLabel" class="text-gray-400">—</span>
+              </div>
+              <div id="faceProgressBar" class="h-2 overflow-hidden rounded-full bg-gray-700" role="progressbar" aria-label="Videos procesados localmente para identificar rostros" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                <div class="h-full rounded-full bg-amber-400 transition-[width] duration-500" style="width:0%"></div>
+              </div>
+              <p id="faceProgressDetail" class="mt-1 text-xs text-gray-500">Esperando datos</p>
+            </div>
           </div>
           <p id="effectiveConfiguration" class="mt-2 text-xs text-gray-500">Configuración efectiva: esperando datos</p>
+          <div class="mt-2 flex flex-wrap items-center gap-2">
+            <span id="automationControlStatus" class="text-xs text-gray-400" role="status" aria-live="polite"></span>
+            <button id="automationControlBtn" type="button" class="hidden rounded border border-gray-600 px-2 py-1 text-xs hover:bg-gray-700 disabled:opacity-50">Pausar procesamiento</button>
+          </div>
+          <details id="visualRetryHistoryDetails" class="mt-2 hidden text-xs text-gray-400">
+            <summary class="cursor-pointer">Historial de reintentos manuales (técnicos y visuales)</summary>
+            <ol id="visualRetryHistory" class="mt-1 max-h-32 space-y-1 overflow-y-auto"></ol>
+          </details>
           <p id="scanProgressStatus" class="mt-2 hidden text-xs text-amber-300"></p>
         </div>
       </section>
 
-      <div class="relative flex w-full shrink-0 items-center justify-center video-container bg-black" id="playerContainer">
+      <div class="relative flex w-full shrink-0 items-center justify-center video-container" id="playerContainer">
         <!-- Video Player -->
         <video 
           id="videoPlayer" 
@@ -115,11 +122,12 @@
         
         <!-- Empty state -->
         <div id="emptyState" class="absolute inset-0 flex flex-col items-center justify-center text-gray-500">
-          <svg class="w-24 h-24 mb-4 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg class="w-24 h-24 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/>
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
           </svg>
-          <p id="emptyStateMessage" class="text-lg">Navega por las carpetas y selecciona un vídeo</p>
+          <p id="emptyStateMessage" class="text-lg">Tu próxima historia empieza aquí</p>
+          <span class="empty-state-hint">Explora las carpetas y selecciona un vídeo</span>
         </div>
         
         <!-- Loading state -->
@@ -132,7 +140,7 @@
         </div>
       </div>
 
-      <section id="metadataPanel" class="hidden shrink-0 p-4 bg-gray-800 border-t border-gray-700" aria-label="Ficha del vídeo">
+      <section id="metadataPanel" class="hidden shrink-0 p-4 border-t" aria-label="Ficha del vídeo">
         <div class="flex items-center gap-3 mb-2">
           <h3 class="font-semibold">Ficha del vídeo</h3>
           <span id="metadataStatus" class="text-xs text-gray-400" role="status" aria-live="polite"></span>
@@ -142,8 +150,19 @@
           <div><dt class="inline text-gray-400">Resolución: </dt><dd id="metadataResolution" class="inline"></dd></div>
           <div><dt class="inline text-gray-400">Formato: </dt><dd id="metadataCodec" class="inline"></dd></div>
           <div><dt class="inline text-gray-400">Fecha sugerida: </dt><dd id="metadataDate" class="inline"></dd></div>
+          <div><dt class="inline text-gray-400">Ubicación en archivo: </dt><dd id="metadataLocation" class="inline"></dd><a id="metadataMapLink" class="hidden ml-2 text-sky-300 underline underline-offset-2" target="_blank" rel="noopener noreferrer"></a></div>
+          <div><dt class="inline text-gray-400">Cámara/Dispositivo: </dt><dd id="metadataCaptureDevice" class="inline"></dd></div>
         </dl>
         <p id="metadataDateEvidence" class="text-xs text-gray-400 mt-2"></p>
+        <div class="mt-2 flex flex-wrap items-center gap-2">
+          <button id="exportMetadataBtn" type="button" class="hidden rounded border border-gray-600 px-2 py-1 text-xs hover:bg-gray-700">Exportar ficha JSON junto al video</button>
+          <button id="importMetadataBtn" type="button" class="hidden rounded border border-gray-600 px-2 py-1 text-xs hover:bg-gray-700">Importar ficha JSON</button>
+          <span id="metadataExportStatus" class="text-xs text-gray-400" role="status" aria-live="polite"></span>
+        </div>
+        <div id="faceIdentityPanel" class="hidden mt-3 rounded-lg border border-amber-800/60 bg-amber-950/20 p-3">
+          <h4 class="text-sm font-semibold">Personas identificadas localmente</h4>
+          <div id="faceIdentityResults" class="mt-2 flex flex-wrap gap-2"></div>
+        </div>
         <div id="visualMetadata" class="hidden mt-4 border-t border-gray-700 pt-3">
           <h4 id="visualTitle" class="font-medium"></h4>
           <p id="visualSummary" class="text-sm text-gray-300 mt-1"></p>
@@ -160,16 +179,16 @@
       </section>
 
       <!-- Breadcrumbs for current folder -->
-      <nav id="breadcrumbs" class="px-4 py-2 bg-gray-800 border-t border-gray-700 text-sm hidden" aria-label="Ruta actual">
+      <nav id="breadcrumbs" class="px-4 py-2 border-t text-sm hidden" aria-label="Ruta actual">
         <ol class="flex items-center gap-1 text-gray-400" id="breadcrumbList"></ol>
       </nav>
     </main>
 
     <!-- Mobile sidebar overlay -->
     <div id="sidebarOverlay" class="fixed inset-0 bg-black/50 z-40 lg:hidden hidden" aria-hidden="true"></div>
-    <aside id="mobileSidebar" class="fixed inset-y-0 left-0 w-72 bg-gray-800 border-r border-gray-700 z-50 lg:hidden transform -translate-x-full transition-transform duration-300" aria-label="Navegación móvil" aria-hidden="true" inert>
+    <aside id="mobileSidebar" class="fixed inset-y-0 left-0 w-72 border-r z-50 lg:hidden transform -translate-x-full transition-transform duration-300" aria-label="Navegación móvil" aria-hidden="true" inert>
       <div class="p-4 border-b border-gray-700 flex items-center justify-between">
-        <h2 class="text-lg font-semibold">Mis Vídeos</h2>
+        <h2 class="text-lg font-semibold">Archivo</h2>
         <button id="closeSidebar" type="button" class="text-gray-400 hover:text-white" aria-label="Cerrar navegación">
           <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
@@ -184,6 +203,7 @@
         </div>
         <label class="mt-2 flex items-center gap-2 text-xs text-gray-400"><input id="mobileSearchWithinFolder" type="checkbox" disabled />Buscar solo en esta carpeta</label>
         <button id="mobilePeopleDirectoryBtn" class="mt-3 w-full px-3 py-2 text-left text-sm rounded bg-gray-700 hover:bg-gray-600">Personas identificadas</button>
+        <button id="mobileFaceReviewBtn" class="mt-2 w-full px-3 py-2 text-left text-sm rounded bg-gray-700 hover:bg-gray-600">Revisar rostros sin nombre</button>
       </div>
       <nav class="flex-1 p-3 folder-tree overflow-y-auto" id="mobileFolderTree" aria-label="Carpetas y videos"></nav>
     </aside>
@@ -200,6 +220,41 @@
       <button id="closePeopleDialog" type="button" class="rounded px-2 py-1 text-gray-400 hover:bg-gray-700 hover:text-white" aria-label="Cerrar">✕</button>
     </div>
     <div id="peopleDirectory" class="max-h-[60vh] overflow-y-auto p-3"></div>
+  </dialog>
+
+  <dialog id="faceReviewDialog" aria-labelledby="faceReviewTitle" aria-describedby="faceReviewDescription" class="w-[min(64rem,calc(100%-2rem))] max-h-[90vh] overflow-y-auto rounded-xl border border-gray-700 bg-gray-800 p-0 text-gray-100 shadow-2xl backdrop:bg-black/70">
+    <div class="sticky top-0 z-10 flex items-center justify-between border-b border-gray-700 bg-gray-800 p-4">
+      <div>
+        <h2 id="faceReviewTitle" class="font-semibold">Identificar rostros</h2>
+        <p id="faceReviewDescription" class="mt-1 text-xs text-gray-400">Los rostros se procesan localmente. Revisá los parecidos antes de asignarles un nombre.</p>
+      </div>
+      <button id="closeFaceReview" type="button" class="rounded px-2 py-1 text-gray-400 hover:bg-gray-700 hover:text-white" aria-label="Cerrar">✕</button>
+    </div>
+    <div class="grid gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_minmax(20rem,0.9fr)]">
+      <section aria-label="Rostros pendientes">
+        <p id="faceInboxStatus" class="mb-3 text-sm text-gray-400" role="status" aria-live="polite">Cargando rostros…</p>
+        <div id="faceInboxGrid" class="grid grid-cols-2 gap-2 sm:grid-cols-3"></div>
+        <button id="faceLoadMore" type="button" class="mt-3 hidden w-full rounded border border-gray-600 px-3 py-2 text-sm hover:bg-gray-700">Cargar más rostros</button>
+      </section>
+      <section class="min-w-0 rounded-lg border border-gray-700 bg-gray-900/50 p-3" aria-label="Revisar parecidos">
+        <p id="faceSelectedStatus" class="text-sm text-gray-400">Elegí un rostro para buscar parecidos.</p>
+        <p class="mt-1 text-xs text-gray-500">Seleccioná las apariciones que quieras asignar juntas o ignorar. Ignorarlas elimina sus embeddings guardados y las excluye de futuras revisiones para este video y versión del índice facial.</p>
+        <div id="faceNeighborGrid" class="mt-3 grid max-h-72 grid-cols-2 gap-2 overflow-y-auto sm:grid-cols-3"></div>
+        <div id="faceAssignmentControls" class="mt-4 hidden space-y-2 border-t border-gray-700 pt-3">
+          <label class="block text-xs text-gray-400">Persona existente
+            <select id="facePersonSelect" class="mt-1 w-full rounded border border-gray-600 bg-gray-800 px-2 py-2 text-sm text-white"></select>
+          </label>
+          <label class="block text-xs text-gray-400">O crear una persona
+            <input id="faceNewPersonName" maxlength="80" autocomplete="off" class="mt-1 w-full rounded border border-gray-600 bg-gray-800 px-2 py-2 text-sm text-white" placeholder="Nombre" />
+          </label>
+          <div class="flex flex-wrap gap-2">
+            <button id="faceAssignBtn" type="button" class="rounded bg-emerald-700 px-3 py-2 text-sm hover:bg-emerald-600 disabled:opacity-50">Asignar al rostro y seleccionados</button>
+            <button id="faceRejectBtn" type="button" disabled class="rounded border border-gray-600 px-3 py-2 text-sm hover:bg-gray-700 disabled:opacity-50">Ignorar rostros seleccionados</button>
+          </div>
+          <p id="faceAssignmentStatus" class="text-xs text-gray-400" role="status" aria-live="polite"></p>
+        </div>
+      </section>
+    </div>
   </dialog>
 
   <script src="app.js"></script>

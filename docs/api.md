@@ -6,7 +6,7 @@ Base local del despliegue systemd: `http://127.0.0.1:3001`. Todas las rutas de a
 
 ## Acceso
 
-Si `ACCESS_TOKEN` está configurado, toda la API y la reproducción requieren una sesión por cookie `HttpOnly` de 12 horas. La interfaz solicita el token y lo intercambia por la cookie; el token no aparece en URLs ni en enlaces de video. Si una llamada API detecta que la sesión venció, vuelve a solicitar el token y reintenta esa petición una vez. `GET /api/access/status` informa si se requiere acceso y si la sesión actual está autenticada; `POST /api/access/session` recibe `{ "token": "..." }`; `DELETE /api/access/session` cierra la sesión. Sin `ACCESS_TOKEN`, el acceso conserva el comportamiento abierto anterior. Las rutas de edición exigen además `Authorization: Bearer <METADATA_EDIT_TOKEN>`. CORS permite solicitudes same-origin y, solo si se configura, los orígenes HTTP(S) exactos de `CORS_ORIGINS`; un origen no autorizado recibe `403`. Las respuestas `/api` usan `Cache-Control: no-store`. El cuerpo JSON está limitado a 4 KiB.
+Si `ACCESS_TOKEN` está configurado, toda la API y la reproducción requieren una sesión por cookie `HttpOnly` persistente durante 30 días por defecto (`ACCESS_COOKIE_MAX_AGE_SECONDS`). La interfaz solicita el token al iniciar sesión; el token no aparece en URLs ni en enlaces de video. Si una llamada API detecta que la sesión venció, vuelve a solicitarlo y reintenta esa petición una vez. `GET /api/access/status` informa si se requiere acceso y si la sesión actual está autenticada; `POST /api/access/session` recibe `{ "token": "..." }`; `DELETE /api/access/session` cierra la sesión. Sin `ACCESS_TOKEN`, el acceso conserva el comportamiento abierto anterior. Las rutas de edición siguen deshabilitadas si falta `METADATA_EDIT_TOKEN`; cuando hay sesión de biblioteca, esa sesión también autoriza las ediciones y no se vuelve a pedir otro token. Sin sesión de biblioteca, las instalaciones locales pueden usar `Authorization: Bearer <METADATA_EDIT_TOKEN>`. CORS permite solicitudes same-origin y, solo si se configura, los orígenes HTTP(S) exactos de `CORS_ORIGINS`; un origen no autorizado recibe `403`. Las respuestas `/api` usan `Cache-Control: no-store`. El cuerpo JSON está limitado a 4 KiB.
 
 Errores comunes de edición: `503` si no se configuró el token, `401` si no coincide, `400` para datos inválidos y `404` cuando no existe el video/observación solicitado. JSON malformado devuelve `400`, cuerpos mayores a 4 KiB devuelven `413` y otros fallos internos del API devuelven `500`; los errores no incluyen detalles internos. Una ruta `/api` inexistente devuelve `404` con `{ "error": "API route not found" }` (si hay autenticación, primero debe existir una sesión válida).
 
@@ -20,18 +20,29 @@ Errores comunes de edición: `503` si no se configuró el token, `401` si no coi
 | `GET /api/list` | `path` opcional, raíz por defecto; lista carpetas y extensiones reconocidas |
 | `GET /api/stream` | `path` obligatorio y extensión de video reconocida; entrega archivo y acepta rango simple |
 | `GET /api/metadata` | `path` obligatorio; ficha del índice |
+| `POST /api/metadata/export` | `{ "path": "..." }`; crea `<video>.metadata.json` con fingerprint, ficha actual y nombres confirmados. Solo escribe si no existe un sidecar; requiere edición habilitada y sesión/Bearer autorizado |
+| `POST /api/metadata/import` | `{ "path": "..." }`; valida e importa el sidecar vecino si coincide el fingerprint y todavía no existe una revisión visual. No restaura embeddings faciales ni sobrescribe fichas; requiere edición habilitada |
 | `GET /api/metadata/evidence` | `path`, `revision`, `at_seconds`; JPEG de evidencia activa o de una identidad anterior pendiente |
+| `GET /api/faces/inbox` | `after`, `limit`; rostros sin nombre de la versión facial configurada y progreso de indexación |
+| `GET /api/faces/:id/neighbors` | Busca embeddings faciales cercanos entre videos vigentes; no asigna identidades |
+| `GET /api/faces/:id/preview` | JPEG recortado generado bajo demanda desde pCloud; requiere la sesión de lectura y no se guarda en disco |
+| `POST /api/faces/assign` | `{ "face_ids": [1, 2], "person_id": 7 }` o `{ "face_ids": [1], "person_name": "Nombre" }`; confirma identidades; requiere sesión autenticada o Bearer en modo local |
+| `POST /api/faces/reject` | `{ "face_ids": [1, 2] }`; ignora detecciones sin identificar seleccionadas, elimina sus embeddings y las conserva excluidas al reindexar el mismo video, fingerprint y versión del índice; no afecta identidades confirmadas. Requiere sesión autenticada o Bearer en modo local |
+| `POST /api/metadata/visual/retry` | `{ "path": "..." }`; pone un análisis fallido en cola, reinicia sus intentos y registra la acción; requiere sesión autenticada o Bearer en modo local |
+| `POST /api/metadata/technical/retry` | `{ "path": "..." }`; devuelve una ficha técnica fallida a la cola del próximo inventario y registra la acción; requiere sesión autenticada o Bearer en modo local |
 | `GET /api/index/status` | Conteos, último recorrido y configuración efectiva no secreta registrada por cada trabajador |
 | `GET /api/search` | `q`, `from`, `to`, `person_id`, `folder`, `limit`, `offset` |
 | `GET /api/people` | Catálogo de nombres y cantidades |
-| `PATCH /api/people/:id` | `{ "name": "..." }`; renombra con `METADATA_EDIT_TOKEN` y actualiza la búsqueda |
-| `PATCH /api/people/:id/merge` | `{ "target_person_id": 7 }`; fusiona en el destino, con `METADATA_EDIT_TOKEN` |
-| `POST /api/people/merges/:id/undo` | Deshace una fusión activa; requiere `METADATA_EDIT_TOKEN` |
-| `PUT /api/metadata/person` | Asociación de una observación con un nombre |
-| `POST /api/metadata/person/review-stale` | Marca una identificación antigua revisada sin reasignarla; requiere `METADATA_EDIT_TOKEN` |
+| `PATCH /api/people/:id` | `{ "name": "..." }`; renombra y actualiza la búsqueda |
+| `PATCH /api/people/:id/merge` | `{ "target_person_id": 7 }`; fusiona en el destino |
+| `POST /api/people/merges/:id/undo` | Deshace una fusión activa |
+| `PUT /api/metadata/person` | `{ "person_ids": [7, 8] }`; asigna varias identidades a una observación |
+| `POST /api/metadata/person/review-stale` | Marca una identificación antigua revisada sin reasignarla |
 | `PATCH /api/metadata/people` | Lista general de nombres de compatibilidad |
 
-No existen endpoints para iniciar, pausar o cancelar análisis, editar fechas ni regenerar fichas desde la web. El catálogo permite renombrar, fusionar y deshacer fusiones con `METADATA_EDIT_TOKEN`.
+No existen endpoints para iniciar o cancelar análisis, editar fechas ni regenerar fichas desde la web. Las rutas de escritura requieren `METADATA_EDIT_TOKEN` configurado; con `ACCESS_TOKEN`, la cookie de sesión autentica las escrituras sin un segundo token por acción. La exportación solo se ofrece con ficha técnica y visual vigentes; no sobrescribe archivos existentes ni modifica el video. La importación requiere ficha técnica lista, ausencia de una ficha visual previa, un sidecar regular menor a 2 MiB y un fingerprint idéntico con algoritmo conocido. Ese fingerprint compara tamaño y mtime redondeado; no es un hash criptográfico del contenido. La importación restaura asignaciones narrativas confirmadas por nombre y metadata técnica si falta localmente; un resumen facial no equivale a asignaciones faciales activas.
+
+`GET /api/metadata` incluye `identified_faces`, un conteo por persona obtenido de embeddings confirmados localmente. El catálogo, las fusiones y los filtros exactos de búsqueda incluyen esas asignaciones. Las similitudes de `/neighbors` son cosenos de embeddings SFace, no probabilidades; el cliente debe presentarlas como sugerencias y pedir confirmación humana.
 
 ## Directorios y reproducción
 
@@ -66,7 +77,7 @@ La implementación acepta un rango simple `bytes=inicio-fin`, `bytes=inicio-` o 
 
 ## Ficha
 
-`GET /api/metadata?path=...` devuelve la fila de `videos`, más las versiones parseadas de sus JSON, `identified_people`, `stale_identifications`, `identity_history` y `can_edit_people`. Las identidades de una revisión anterior aparecen en `stale_identifications` para revisión manual; nunca se aplican automáticamente a la nueva lista. Al reconciliar una de ellas desde la interfaz, `PUT /api/metadata/person` envía además `stale_observation: { "analysis_revision": "...", "observation_index": 0 }`. Se puede cambiar el nombre elegido durante la reconciliación. El servidor marca como revisada la asignación antigua y guarda la nueva en la misma transacción. `identity_history` lista hasta 100 cambios humanos, del más reciente al más antiguo, incluidos los nombres anterior y nuevo y las reconciliaciones entre revisiones. Un archivo puede existir en el montaje y devolver `404` aquí si todavía no está indexado. Ruta inválida: `400`.
+`GET /api/metadata?path=...` devuelve la fila de `videos`, más las versiones parseadas de sus JSON, `identified_people`, `identified_people_all`, `stale_identifications`, `identity_history` y `can_edit_people`. Las identidades de una revisión anterior aparecen en `stale_identifications` para revisión manual; nunca se aplican automáticamente a la nueva lista. Al reconciliar una de ellas desde la interfaz, `PUT /api/metadata/person` envía además `stale_observation: { "analysis_revision": "...", "observation_index": 0 }`. Se puede cambiar el nombre elegido durante la reconciliación. El servidor marca como revisada la asignación antigua y guarda la nueva en la misma transacción. `identity_history` lista hasta 100 cambios, del más reciente al más antiguo; las ediciones grupales incluyen los conjuntos de nombres anteriores y nuevos en `previous_people_json` y `people_json`. Un archivo puede existir en el montaje y devolver `404` aquí si todavía no está indexado. Ruta inválida: `400`.
 
 `POST /api/metadata/person/review-stale` recibe `{ "path": "...", "analysis_revision": "...", "observation_index": 0 }`. Cierra la revisión pendiente sin crear una asignación en la ficha actual y registra `dismissed` en `identity_history`. Requiere autorización de edición; devuelve `404` si la identificación ya no está pendiente.
 
@@ -86,11 +97,13 @@ Campos principales:
 
 El uso del proveedor se devuelve como texto JSON en `visual_usage_json`. Los campos originales `*_json` también acompañan a sus versiones parseadas; no hay un DTO separado.
 
-Las listas `visual_people`, `visual_events` y `visual_date_clues` contienen objetos `{ "description": "...", "at_seconds": 12 }`. `identified_people` es un objeto con índices de observación como claves, por ejemplo `{ "0": { "id": 7, "name": "Jorge" } }`. No garantiza identidad automática ni correspondencia persistente después de un reanálisis.
+Las listas `visual_people`, `visual_events` y `visual_date_clues` contienen objetos `{ "description": "...", "at_seconds": 12 }`. `visual_sampling` registra método y segundos de los fotogramas que se enviaron en la ficha vigente para poder medir cobertura después. `identified_people` conserva la primera identidad de cada observación por compatibilidad. `identified_people_all` devuelve todas como listas por índice, por ejemplo `{ "0": [{ "id": 7, "name": "Jorge" }, { "id": 8, "name": "Ana" }] }`. `PUT /api/metadata/person` acepta `person_ids: [7, 8]`; la primera queda como identidad principal para clientes anteriores. Las asignaciones son manuales y no garantizan correspondencia persistente después de un reanálisis.
 
 ## Progreso
 
 `GET /api/index/status` incluye `worker_configuration.technical` y `worker_configuration.visual` después de que cada etapa haya iniciado. Incluye los límites efectivos, flags de reintento, modo puntual/modelo visual y hora del registro; nunca incluye `OPENROUTER_API_KEY` ni `METADATA_EDIT_TOKEN`.
+
+También devuelve `schema_version` y `applied_migrations`, con las migraciones SQLite numeradas aplicadas.
 
 `GET /api/index/status` devuelve:
 
@@ -117,9 +130,9 @@ Ejemplo basado en la ejecución documentada, no respuesta fija. Las claves de es
 - `visual_ready_counts`: solo videos técnicos `done`.
 - Timestamps de SQLite: UTC, en texto sin sufijo de zona. La interfaz los interpreta como UTC y los muestra en hora local.
 
-`worker_activity` informa si el PID local sigue vivo, heartbeat, etapa y archivo actual sin exponer el PID. No expone estado de systemd ni historial completo de lotes visuales.
+`worker_activity` informa si el PID local sigue vivo, heartbeat, etapa y archivo actual sin exponer el PID. No expone estado de systemd ni historial completo de lotes visuales. `visual_manual_retries` y `technical_manual_retries` agregan solicitudes manuales recientes con hora UTC y ruta para que el panel pueda confirmar qué fichas se reencolaron.
 
-`worker_configuration` registra la última configuración no secreta usada por cada etapa (`technical` y `visual`), además de `updated_at`. Si una etapa nunca inició, su entrada no existe. No representa un proceso vivo ni lee cambios posteriores en los archivos de entorno hasta el siguiente arranque.
+`worker_configuration` registra la última configuración no secreta usada por cada etapa (`technical` y `visual`), además de `updated_at`. La configuración visual incluye lote, máximo de fotogramas. Si una etapa nunca inició, su entrada no existe. No representa un proceso vivo ni lee cambios posteriores en los archivos de entorno hasta el siguiente arranque.
 
 `worker_activity` contiene las claves `indexer` y `visual-analyzer` después de su primer inicio, con `status`, `active`, `stale`, `started_at`, `heartbeat_at`, `current_video_id`, `current_path`, `phase`, `last_result`, `last_error` y `finished_at`. `stale=true` significa que el registro sigue en `running` pero el PID de este mismo host ya no existe.
 
@@ -127,9 +140,15 @@ Ejemplo basado en la ejecución documentada, no respuesta fija. Las claves de es
 
 `visual_daily_budget` informa `utc_day`, solicitudes iniciadas, límite efectivo (`0` significa desactivado) y solicitudes restantes (`null` sin límite). El límite `MAX_VISUAL_REQUESTS_PER_DAY` se aplica antes de cada llamada al proveedor; el contador se persiste por fecha UTC en SQLite. Cuando se alcanza, las fichas no procesadas quedan pendientes para un lote posterior. Si está habilitado `pcloud-video-visual.timer`, systemd lo intentará en el siguiente intervalo; de lo contrario, hay que iniciar el servicio manualmente después de las 00:00 UTC.
 
+`visual_monthly_budget` informa mes UTC, costo reportado acumulado, límite, restante y `reserve_per_request_usd`, el número de muestras y el costo máximo reciente de ese modelo. La reserva efectiva es el mayor entre `MAX_VISUAL_COST_RESERVE_PER_REQUEST_USD` y dos veces el `usage.cost` más alto de hasta 30 fichas completadas del mismo modelo en el mes UTC. `MAX_VISUAL_COST_PER_MONTH_USD=0` desactiva el umbral. Si está activo, el analizador requiere que el restante cubra la reserva configurable `MAX_VISUAL_COST_RESERVE_PER_REQUEST_USD` antes de enviar cada solicitud. La suma se calcula a partir del campo `usage.cost` guardado en fichas completadas; el proveedor reporta ese costo después de responder, por lo que la reserva reduce el riesgo pero no garantiza un tope financiero, y fallos sin respuesta no tienen costo contabilizado.
+
 `visual_provider_control` indica si el analizador quedó pausado por fallo de configuración o está esperando cuota/red/proveedor. Los errores permanentes exigen cambiar clave, modelo o endpoint para despejar la pausa; las esperas temporales informan `paused_until`. No expone credenciales ni el fingerprint de configuración.
 
 `visual_timer` consulta el estado de solo lectura de `pcloud-video-visual.timer`: indica si la unidad existe, está activa/habilitada, el último disparo y la próxima ejecución. Si el host no usa systemd o no se puede consultar, `load_state` es `unknown`; la ruta no activa ni modifica unidades.
+
+`pipeline_timer` da la misma información de `pcloud-video-pipeline.timer`. `pipeline.js` ejecuta inventario técnico y, al completarlo, un lote visual limitado. La unidad y el timer son optativos; habilitarlos puede consumir cuota del proveedor.
+
+`automation_control` informa si el procesamiento está pausado, cuándo y desde qué interfaz se cambió, más los últimos 20 eventos de un historial SQLite limitado a 200 entradas. `POST /api/index/control` recibe `{ "paused": true }` o `false` y requiere sesión autenticada o `Authorization: Bearer <METADATA_EDIT_TOKEN>` en modo local. El control detiene nuevas ejecuciones y evita que el analizador tome otro video; el inventario técnico o la solicitud visual que ya está en curso termina normalmente.
 
 `visual_retry_wait` informa cuántos fallos tienen reintento pendiente y el próximo horario. Los errores transitorios usan espera exponencial hasta 24 horas; `429` comienza en cinco minutos y otros transitorios en un minuto. Cada fingerprint admite hasta `MAX_VISUAL_ATTEMPTS` intentos automáticos (por defecto cinco). Los errores `401`, `403` y otros `4xx` no reciben reintento automático. `RETRY_VISUAL_FAILED=1` es necesario para tomar fallos ya vencidos en una ejecución posterior.
 
@@ -143,6 +162,8 @@ curl -fsS --get http://127.0.0.1:3001/api/search \
   --data-urlencode 'limit=50' \
   --data-urlencode 'offset=0'
 ```
+
+La búsqueda usa la ficha y el índice FTS5.
 
 | Parámetro | Comportamiento |
 |---|---|
@@ -169,7 +190,7 @@ Respuesta `{ "items": [...], "limit": 50, "offset": 0, "has_more": false }`. `ha
 }
 ```
 
-`PATCH /api/people/:id` requiere `Authorization: Bearer <METADATA_EDIT_TOKEN>` y recibe `{ "name": "Nombre actualizado" }`. Actualiza el nombre del catálogo y reconstruye el texto de búsqueda de los videos con asociaciones vigentes. Devuelve `409` si otro registro ya usa ese nombre y `404` si la persona no existe.
+`PATCH /api/people/:id` requiere sesión autenticada (o `Authorization: Bearer <METADATA_EDIT_TOKEN>` en modo local) y recibe `{ "name": "Nombre actualizado" }`. Actualiza el nombre del catálogo y reconstruye el texto de búsqueda de los videos con asociaciones vigentes. Devuelve `409` si otro registro ya usa ese nombre y `404` si la persona no existe.
 
 `PATCH /api/people/:id/merge` recibe `{ "target_person_id": 7 }`. Mantiene el ID destino, mueve las asociaciones actuales e históricas, y archiva el ID origen. Cada fusión guarda las observaciones movidas y aparece en `merges`, las últimas 50 operaciones del historial. `POST /api/people/merges/:id/undo` restaura las asignaciones que aún apuntan al destino; las reasignaciones posteriores se conservan. Para evitar fusiones encadenadas difíciles de revertir, una persona involucrada en otra fusión activa debe deshacerse primero. IDs inválidos devuelven `400`, fusión conflictiva `409` y fusión inexistente `404`.
 

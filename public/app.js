@@ -39,6 +39,12 @@ const metadataResolution = document.getElementById('metadataResolution');
 const metadataCodec = document.getElementById('metadataCodec');
 const metadataDate = document.getElementById('metadataDate');
 const metadataDateEvidence = document.getElementById('metadataDateEvidence');
+const metadataLocation = document.getElementById('metadataLocation');
+const metadataMapLink = document.getElementById('metadataMapLink');
+const metadataCaptureDevice = document.getElementById('metadataCaptureDevice');
+const exportMetadataBtn = document.getElementById('exportMetadataBtn');
+const importMetadataBtn = document.getElementById('importMetadataBtn');
+const metadataExportStatus = document.getElementById('metadataExportStatus');
 const visualMetadata = document.getElementById('visualMetadata');
 const visualTitle = document.getElementById('visualTitle');
 const visualSummary = document.getElementById('visualSummary');
@@ -48,11 +54,28 @@ const visualEvents = document.getElementById('visualEvents');
 const visualPlaces = document.getElementById('visualPlaces');
 const visualDateClues = document.getElementById('visualDateClues');
 const identityHelp = document.getElementById('identityHelp');
+const faceIdentityPanel = document.getElementById('faceIdentityPanel');
+const faceIdentityResults = document.getElementById('faceIdentityResults');
 const peopleDirectoryBtn = document.getElementById('peopleDirectoryBtn');
 const mobilePeopleDirectoryBtn = document.getElementById('mobilePeopleDirectoryBtn');
+const faceReviewBtn = document.getElementById('faceReviewBtn');
+const mobileFaceReviewBtn = document.getElementById('mobileFaceReviewBtn');
 const peopleDialog = document.getElementById('peopleDialog');
 const peopleDirectory = document.getElementById('peopleDirectory');
 const closePeopleDialog = document.getElementById('closePeopleDialog');
+const faceReviewDialog = document.getElementById('faceReviewDialog');
+const closeFaceReview = document.getElementById('closeFaceReview');
+const faceInboxStatus = document.getElementById('faceInboxStatus');
+const faceInboxGrid = document.getElementById('faceInboxGrid');
+const faceLoadMore = document.getElementById('faceLoadMore');
+const faceSelectedStatus = document.getElementById('faceSelectedStatus');
+const faceNeighborGrid = document.getElementById('faceNeighborGrid');
+const faceAssignmentControls = document.getElementById('faceAssignmentControls');
+const facePersonSelect = document.getElementById('facePersonSelect');
+const faceNewPersonName = document.getElementById('faceNewPersonName');
+const faceAssignBtn = document.getElementById('faceAssignBtn');
+const faceRejectBtn = document.getElementById('faceRejectBtn');
+const faceAssignmentStatus = document.getElementById('faceAssignmentStatus');
 const progressUpdated = document.getElementById('progressUpdated');
 const technicalProgressLabel = document.getElementById('technicalProgressLabel');
 const technicalProgressDetail = document.getElementById('technicalProgressDetail');
@@ -60,9 +83,17 @@ const technicalProgressBar = document.getElementById('technicalProgressBar');
 const visualProgressLabel = document.getElementById('visualProgressLabel');
 const visualProgressDetail = document.getElementById('visualProgressDetail');
 const visualProgressBar = document.getElementById('visualProgressBar');
+const faceProgressBar = document.getElementById('faceProgressBar');
+const faceProgressLabel = document.getElementById('faceProgressLabel');
+const faceProgressDetail = document.getElementById('faceProgressDetail');
 const scanProgressStatus = document.getElementById('scanProgressStatus');
 const effectiveConfiguration = document.getElementById('effectiveConfiguration');
+const automationControlBtn = document.getElementById('automationControlBtn');
+const automationControlStatus = document.getElementById('automationControlStatus');
+const manualRetryHistoryDetails = document.getElementById('visualRetryHistoryDetails');
+const manualRetryHistory = document.getElementById('visualRetryHistory');
 let selectedVideoPath = null;
+let selectedMetadataId = null;
 let selectedMetadataRevision = null;
 let playbackRequestId = 0;
 let selectedPersonId = null;
@@ -70,10 +101,16 @@ let editToken = null;
 let knownPeople = [];
 let knownPersonMerges = [];
 let canEditPeopleDirectory = false;
+let faceInboxItems = [];
+let faceInboxCursor = 0;
+let faceInboxTotal = 0;
+let selectedFaceForReview = null;
+let selectedFaceIds = new Set();
 let searchTimer;
 let searchRequestId = 0;
 let treeRequestId = 0;
 let accessRenewalPromise = null;
+let accessSessionRequired = false;
 const SEARCH_PAGE_SIZE = 50;
 
 // API Base URL
@@ -106,6 +143,7 @@ async function establishAccessSession() {
     const statusResponse = await fetch(`${API_BASE}/api/access/status`, { credentials: 'same-origin' });
     if (!statusResponse.ok) throw new Error(`HTTP ${statusResponse.status}`);
     const status = await statusResponse.json();
+    accessSessionRequired = Boolean(status.required);
     if (!status.required || status.authenticated) return true;
 
     const token = window.prompt('Token de acceso a la biblioteca:');
@@ -176,6 +214,7 @@ function renderProcessProgress(status) {
   const visualDone = count(visual.done);
   const retryWait = status.visual_retry_wait || {};
   const dailyBudget = status.visual_daily_budget || {};
+  const monthlyBudget = status.visual_monthly_budget || {};
   const retryEnabled = status.worker_configuration?.visual?.retry_failed;
   const retryAt = retryWait.next_at ? new Date(`${retryWait.next_at.replace(' ', 'T')}Z`) : null;
   const retryTime = retryAt && !Number.isNaN(retryAt.getTime())
@@ -189,6 +228,13 @@ function renderProcessProgress(status) {
 
   setProgress(technicalProgressBar, technicalProgressLabel, technicalDone, totalTechnical);
   setProgress(visualProgressBar, visualProgressLabel, visualDone, totalVisual);
+  const faceProgress = status.face_progress || { total: 0, indexed: 0, remaining: 0, failed: 0, faces: {} };
+  setProgress(faceProgressBar, faceProgressLabel, faceProgress.indexed, faceProgress.total);
+  const faceRetryEnabled = status.worker_configuration?.['face-embedding-indexer']?.retry_failed;
+  const faceFailures = count(faceProgress.failed)
+    ? ` · ${format(faceProgress.failed)} con error${faceRetryEnabled ? ' · reintentos habilitados' : ' · reintentos desactivados'}`
+    : '';
+  faceProgressDetail.textContent = `${format(faceProgress.remaining)} videos pendientes${faceFailures} · ${format(faceProgress.faces?.unassigned)} rostros por revisar · ${format(faceProgress.faces?.ignored)} ignorados · ${faceProgress.model || 'modelo local no configurado'}`;
   technicalProgressDetail.textContent = [
     `${format(technical.pending)} pendientes`,
     `${format(technical.failed)} con error`,
@@ -202,12 +248,30 @@ function renderProcessProgress(status) {
     count(retryWait.ready_count) && !retryEnabled ? `${format(retryWait.ready_count)} reintentos vencidos · activá RETRY_VISUAL_FAILED` : '',
     count(retryWait.count) > count(retryWait.ready_count) ? `${format(count(retryWait.count) - count(retryWait.ready_count))} esperando reintento${retryTime ? ` · próximo ${retryTime}` : ''}` : '',
     count(dailyBudget.limit) ? `Solicitudes del proveedor hoy: ${format(dailyBudget.requests)} / ${format(dailyBudget.limit)} UTC${count(dailyBudget.remaining) === 0 ? ' · límite alcanzado, se renueva a las 00:00 UTC' : ''}` : '',
+    Number(monthlyBudget.limit_usd) > 0 ? `Costo reportado este mes: USD ${Number(monthlyBudget.spent_usd || 0).toFixed(4)} / ${Number(monthlyBudget.limit_usd).toFixed(2)} · reserva por solicitud: USD ${Number(monthlyBudget.reserve_per_request_usd || 0).toFixed(4)}${Number(monthlyBudget.remaining_usd) < Number(monthlyBudget.reserve_per_request_usd) || Number(monthlyBudget.remaining_usd) <= 0 ? ' · sin reserva disponible' : ''}` : '',
     count(technical.pending) ? `${format(technical.pending)} esperando inventario técnico` : ''
   ].filter(Boolean).join(' · ');
 
   const configured = status.worker_configuration || {};
   const activity = status.worker_activity || {};
   const visualWorker = activity['visual-analyzer'];
+  const faceWorker = activity['face-embedding-indexer'];
+  if (faceWorker?.active) {
+    const current = faceWorker.current_path ? ` · ${faceWorker.current_path}` : '';
+    const phase = faceWorker.phase ? ` (${faceWorker.phase})` : '';
+    faceProgressDetail.textContent += ` · Procesando localmente${current}${phase}`;
+  } else if (faceWorker?.stale) {
+    faceProgressDetail.textContent += ' · El último proceso se interrumpió; el próximo lote retomará los videos pendientes.';
+  }
+  const faceTimer = status.face_timer || {};
+  if (faceTimer.load_state === 'not-found') {
+    faceProgressDetail.textContent += ' · Timer del indexador facial no instalado';
+  } else if (faceTimer.active) {
+    faceProgressDetail.textContent += faceTimer.next_run ? ` · Próximo lote ${faceTimer.next_run}` : ' · Timer activo';
+  } else if (faceTimer.available) {
+    faceProgressDetail.textContent += faceTimer.enabled
+      ? ' · Timer habilitado, esperando próximo disparo' : ' · Timer instalado pero deshabilitado';
+  }
   const providerControl = status.visual_provider_control || {};
   if (visualWorker?.active) {
     const current = visualWorker.current_path ? ` · ${visualWorker.current_path}` : '';
@@ -235,6 +299,35 @@ function renderProcessProgress(status) {
     visualProgressDetail.textContent += visualTimer.enabled
       ? ' · Timer visual habilitado, esperando próximo disparo'
       : ' · Timer visual instalado pero deshabilitado';
+  }
+  const pipelineTimer = status.pipeline_timer || {};
+  if (pipelineTimer.active) {
+    const next = pipelineTimer.next_run ? ` · próximo ${pipelineTimer.next_run}` : '';
+    visualProgressDetail.textContent += ` · Pipeline técnico + visual automático activo${next}`;
+  } else if (pipelineTimer.enabled) {
+    const next = pipelineTimer.next_run ? ` · próximo ${pipelineTimer.next_run}` : '';
+    visualProgressDetail.textContent += ` · Pipeline automático habilitado${next}`;
+  }
+  const control = status.automation_control || {};
+  automationControlBtn.classList.toggle('hidden', !status.can_control_automation);
+  automationControlBtn.dataset.paused = String(Boolean(control.paused));
+  automationControlBtn.textContent = control.paused ? 'Reanudar procesamiento' : 'Pausar procesamiento';
+  automationControlStatus.textContent = control.paused
+    ? `Procesamiento pausado desde ${control.changed_at || 'la interfaz'}. El trabajo técnico en curso termina; el analizador visual no toma otro video.`
+    : 'Procesamiento habilitado.';
+  if (control.changed_by && control.changed_by !== 'initialization') {
+    automationControlStatus.textContent += ` Último cambio: ${control.changed_by}, ${control.changed_at}.`;
+  }
+  const manualRetries = [
+    ...(status.visual_manual_retries || []).map(retry => ({ ...retry, stage: 'Visual' })),
+    ...(status.technical_manual_retries || []).map(retry => ({ ...retry, stage: 'Técnico' }))
+  ].sort((a, b) => b.requested_at.localeCompare(a.requested_at)).slice(0, 20);
+  manualRetryHistoryDetails.classList.toggle('hidden', !manualRetries.length);
+  manualRetryHistory.replaceChildren();
+  for (const retry of manualRetries) {
+    const entry = document.createElement('li');
+    entry.textContent = `${retry.requested_at} UTC · ${retry.stage} · ${retry.relative_path}`;
+    manualRetryHistory.appendChild(entry);
   }
   const history = status.worker_history || {};
   const describeLastRun = run => {
@@ -267,7 +360,9 @@ function renderProcessProgress(status) {
     const requestLimit = effective.max_visual_requests_per_day
       ? `, ${format(effective.max_visual_requests_per_day)} solicitudes/día UTC`
       : ', solicitudes/día sin límite';
-    settings.push(`Visual: ${effective.model}, lote ${format(effective.max_visual)}, máximo ${format(effective.max_visual_attempts)} intentos${requestLimit}, reintentos ${effective.retry_failed ? 'activos' : 'desactivados'}${target}`);
+    const sampling = `, hasta ${format(effective.max_visual_frames || 4)} fotogramas según duración`;
+    const timeout = `, espera máx. ${format((effective.visual_request_timeout_ms || 300000) / 1000)} s`;
+    settings.push(`Visual: ${effective.model}, lote ${format(effective.max_visual)}, máximo ${format(effective.max_visual_attempts)} intentos${requestLimit}${sampling}${timeout}, reintentos ${effective.retry_failed ? 'activos' : 'desactivados'}${target}`);
   }
   effectiveConfiguration.textContent = settings.length
     ? `Configuración efectiva de la última ejecución: ${settings.join(' · ')}`
@@ -316,11 +411,20 @@ function renderProcessProgress(status) {
 }
 
 function setupEventListeners() {
+  automationControlBtn.addEventListener('click', changeAutomationControl);
   // Refresh button
   refreshBtn.addEventListener('click', updateSearch);
   peopleDirectoryBtn.addEventListener('click', openPeopleDirectory);
+  faceReviewBtn.addEventListener('click', openFaceReview);
   mobilePeopleDirectoryBtn.addEventListener('click', openPeopleDirectory);
+  mobileFaceReviewBtn.addEventListener('click', openFaceReview);
   closePeopleDialog.addEventListener('click', () => peopleDialog.close());
+  closeFaceReview.addEventListener('click', () => faceReviewDialog.close());
+  faceLoadMore.addEventListener('click', () => loadFaceInbox(true));
+  faceAssignBtn.addEventListener('click', assignSelectedFaces);
+  faceRejectBtn.addEventListener('click', rejectSelectedFace);
+  facePersonSelect.addEventListener('change', () => { if (facePersonSelect.value) faceNewPersonName.value = ''; });
+  faceNewPersonName.addEventListener('input', () => { if (faceNewPersonName.value.trim()) facePersonSelect.value = ''; });
   for (const input of [searchInput, mobileSearchInput]) {
     input.addEventListener('input', () => {
       selectedPersonId = null;
@@ -379,6 +483,29 @@ function setupEventListeners() {
       first.focus();
     }
   });
+}
+
+async function changeAutomationControl() {
+  const token = tokenForEditing();
+  if (token === null) return;
+  automationControlBtn.disabled = true;
+  automationControlStatus.textContent = 'Actualizando el control…';
+  try {
+    const paused = automationControlBtn.dataset.paused !== 'true';
+    const response = await apiFetch(`${API_BASE}/api/index/control`, {
+      method: 'POST',
+      headers: editingHeaders(token),
+      body: JSON.stringify({ paused })
+    });
+    if (response.status === 401) editToken = null;
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    await loadProcessProgress();
+  } catch (error) {
+    automationControlStatus.textContent = `No se pudo cambiar el estado: ${error.message}`;
+  } finally {
+    automationControlBtn.disabled = false;
+  }
 }
 
 function updateSearch() {
@@ -465,7 +592,8 @@ function renderSearchResults(items, container, query, offset, requestId, folder,
     detail.className = 'block truncate text-xs text-gray-400';
     const matchTime = Number.isFinite(item.match_at_seconds)
       ? ` · Momento: ${Math.floor(item.match_at_seconds / 60)}:${String(Math.floor(item.match_at_seconds % 60)).padStart(2, '0')}` : '';
-    detail.textContent = `${item.recorded_at || 'Sin fecha'} · ${item.relative_path}${matchTime}${item.snippet ? ` · Coincidencia: ${item.snippet}` : item.visual_summary ? ` · ${item.visual_summary}` : ''}`;
+    const visualScore = Number.isFinite(item.visual_score) ? ` · similitud ${item.visual_score.toFixed(3)}` : '';
+    detail.textContent = `${item.recorded_at || 'Sin fecha'} · ${item.relative_path}${matchTime}${visualScore}${item.snippet ? ` · Coincidencia: ${item.snippet}` : item.visual_summary ? ` · ${item.visual_summary}` : ''}`;
     button.append(name, detail);
     button.addEventListener('click', () => playVideo(item.relative_path, name.textContent, item.match_at_seconds));
     li.appendChild(button);
@@ -515,6 +643,7 @@ function setupVideoEvents() {
       4: 'El navegador no admite este formato o sus códecs. El servidor no convierte los videos.'
     };
     emptyStateMessage.textContent = messages[videoPlayer.error?.code] || 'No se pudo reproducir este video. Revisá el archivo, la conexión y los códecs admitidos por el navegador.';
+    emptyState.querySelector('.empty-state-hint')?.classList.add('hidden');
     console.error('Video error:', e, videoPlayer.error?.code);
   });
   
@@ -727,12 +856,27 @@ function playVideo(relativePath, name, seekToSeconds = null) {
 async function loadMetadata(relativePath) {
   metadataPanel.classList.remove('hidden');
   selectedMetadataRevision = null;
+  selectedMetadataId = null;
   metadataStatus.textContent = 'Cargando ficha...';
   metadataDuration.textContent = '';
   metadataResolution.textContent = '';
   metadataCodec.textContent = '';
   metadataDate.textContent = '';
   metadataDateEvidence.textContent = '';
+  metadataLocation.textContent = '';
+  metadataMapLink.removeAttribute('href');
+  metadataMapLink.textContent = '';
+  metadataMapLink.classList.add('hidden');
+  metadataCaptureDevice.textContent = '';
+  exportMetadataBtn.classList.add('hidden');
+  exportMetadataBtn.disabled = false;
+  exportMetadataBtn.onclick = null;
+  importMetadataBtn.classList.add('hidden');
+  importMetadataBtn.disabled = false;
+  importMetadataBtn.onclick = null;
+  metadataExportStatus.textContent = '';
+  faceIdentityPanel.classList.add('hidden');
+  faceIdentityResults.replaceChildren();
   visualPeople.replaceChildren();
   identityHelp.textContent = '';
   visualMetadata.classList.add('hidden');
@@ -751,6 +895,7 @@ async function loadMetadata(relativePath) {
     if (peopleResponse.ok) knownPeople = (await peopleResponse.json()).items || [];
     if (selectedVideoPath !== relativePath) return;
     selectedMetadataRevision = item.visual_revision || null;
+    selectedMetadataId = item.id;
     metadataStatus.textContent = {
       pending: 'Pendiente de análisis técnico',
       failed: 'Error al leer el archivo',
@@ -761,15 +906,140 @@ async function loadMetadata(relativePath) {
     metadataResolution.textContent = item.width && item.height ? `${item.width} × ${item.height}` : 'Desconocida';
     metadataCodec.textContent = item.codec || 'Desconocido';
     metadataDate.textContent = item.recorded_at || 'Sin determinar';
+    const location = item.technical?.location;
+    if (location) {
+      const coords = location.coordinates;
+      const formattedCoords = coords
+        ? `${coords.latitude.toFixed(5)}, ${coords.longitude.toFixed(5)}${coords.altitude_m == null ? '' : ` · ${coords.altitude_m} m`}`
+        : '';
+      const rawIsCoordinates = /^\s*[+-]?\d+(?:\.\d+)?\s*,\s*[+-]?\d+(?:\.\d+)?\s*$/.test(location.raw || '') || /^\s*[+-]\d{2,6}(?:\.\d+)?[+-]\d{3,7}(?:\.\d+)?/.test(location.raw || '');
+      const value = formattedCoords && location.raw && !rawIsCoordinates
+        ? `${location.raw} · ${formattedCoords}`
+        : formattedCoords || location.raw;
+      metadataLocation.textContent = `${value}${location.source ? ` (${location.source})` : ''}`;
+      if (Number.isFinite(coords?.latitude) && Math.abs(coords.latitude) <= 90 &&
+          Number.isFinite(coords?.longitude) && Math.abs(coords.longitude) <= 180) {
+        const latitude = coords.latitude;
+        const longitude = coords.longitude;
+        metadataMapLink.href = `https://www.openstreetmap.org/?mlat=${latitude}&mlon=${longitude}#map=16/${latitude}/${longitude}`;
+        metadataMapLink.textContent = 'Abrir mapa';
+        metadataMapLink.setAttribute('aria-label', 'Abrir estas coordenadas en OpenStreetMap; el sitio recibirá las coordenadas');
+        metadataMapLink.classList.remove('hidden');
+      }
+    } else {
+      metadataLocation.textContent = 'Sin ubicación en los metadatos del archivo';
+    }
+    const captureDevice = item.technical?.capture_device;
+    const captureDeviceText = [captureDevice?.manufacturer, captureDevice?.model]
+      .filter(entry => entry?.value)
+      .map(entry => `${entry.value}${entry.source ? ` (${entry.source})` : ''}`)
+      .join(' · ');
+    metadataCaptureDevice.textContent = captureDeviceText || 'Sin tag de cámara/dispositivo';
     const sources = (item.date_candidates || []).map(candidate => `${candidate.date} (${candidate.source})`);
     metadataDateEvidence.textContent = sources.length ? `Fechas encontradas: ${sources.join(' · ')}` : 'No se encontraron fechas en el archivo o su nombre.';
     renderVisualMetadata(item);
+    if (item.status === 'done' && item.visual_status === 'done' && item.visual_fingerprint === item.fingerprint && item.can_edit_people) {
+      exportMetadataBtn.classList.remove('hidden');
+      exportMetadataBtn.onclick = async () => {
+        const sidecarPath = `${item.relative_path}.metadata.json`;
+        if (!window.confirm(`Se creará ${sidecarPath} en la misma carpeta del video. Si ese sidecar ya existe, no se sobrescribirá. ¿Continuar?`)) return;
+        exportMetadataBtn.disabled = true;
+        metadataExportStatus.textContent = 'Exportando ficha…';
+        try {
+          const token = tokenForEditing();
+          if (token === null) throw new Error('Se canceló la autenticación');
+          const exportResponse = await apiFetch(`${API_BASE}/api/metadata/export`, {
+            method: 'POST',
+            headers: editingHeaders(token),
+            body: JSON.stringify({ path: item.relative_path })
+          });
+          if (exportResponse.status === 401) editToken = null;
+          const result = await exportResponse.json().catch(() => ({}));
+          if (!exportResponse.ok) throw new Error(result.error || `HTTP ${exportResponse.status}`);
+          if (selectedVideoPath === item.relative_path) {
+            metadataExportStatus.textContent = `Sidecar creado: ${result.sidecar_path}`;
+          }
+        } catch (error) {
+          if (selectedVideoPath === item.relative_path) {
+            metadataExportStatus.textContent = `No se pudo exportar: ${error.message}`;
+          }
+        } finally {
+          exportMetadataBtn.disabled = false;
+        }
+      };
+    }
+    if (item.status === 'done' && !item.visual_revision && item.can_edit_people) {
+      importMetadataBtn.classList.remove('hidden');
+      importMetadataBtn.onclick = async () => {
+        if (!window.confirm('Se intentará importar la ficha del archivo .metadata.json junto al video. Solo se acepta si el fingerprint coincide y no existe una ficha visual previa. ¿Continuar?')) return;
+        importMetadataBtn.disabled = true;
+        metadataExportStatus.textContent = 'Validando e importando sidecar…';
+        try {
+          const token = tokenForEditing();
+          if (token === null) throw new Error('Se canceló la autenticación');
+          const importResponse = await apiFetch(`${API_BASE}/api/metadata/import`, {
+            method: 'POST',
+            headers: editingHeaders(token),
+            body: JSON.stringify({ path: item.relative_path })
+          });
+          if (importResponse.status === 401) editToken = null;
+          const result = await importResponse.json().catch(() => ({}));
+          if (!importResponse.ok) throw new Error(result.error || `HTTP ${importResponse.status}`);
+          await loadMetadata(item.relative_path);
+          if (selectedVideoPath === item.relative_path) {
+            const messages = ['Ficha importada; revisá las identidades narrativas restauradas.'];
+            if (result.location_restored) messages.push('Se restauró la ubicación del sidecar.');
+            if (result.capture_device_restored) messages.push('Se restauró el fabricante/modelo del sidecar.');
+            if (result.face_identity_summary_not_restored) {
+              messages.push(`${result.face_identity_summary_not_restored} resúmenes faciales no se reasignaron; requieren indexación y revisión local.`);
+            }
+            metadataExportStatus.textContent = messages.join(' ');
+          }
+        } catch (error) {
+          if (selectedVideoPath === item.relative_path) {
+            metadataExportStatus.textContent = `No se pudo importar: ${error.message}`;
+          }
+        } finally {
+          importMetadataBtn.disabled = false;
+        }
+      };
+    }
+    if (item.status === 'failed' && item.can_edit_people) {
+      if (metadataStatus.textContent) metadataStatus.append(' · ');
+      const retry = document.createElement('button');
+      retry.type = 'button';
+      retry.className = 'rounded border border-gray-500 px-2 py-1 text-xs hover:bg-gray-700';
+      retry.textContent = 'Reintentar análisis técnico';
+      retry.addEventListener('click', async () => {
+        const token = tokenForEditing();
+        if (token === null) return;
+        retry.disabled = true;
+        try {
+          const response = await apiFetch(`${API_BASE}/api/metadata/technical/retry`, {
+            method: 'POST',
+            headers: editingHeaders(token),
+            body: JSON.stringify({ path: item.relative_path })
+          });
+          if (response.status === 401) editToken = null;
+          const result = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+          if (selectedVideoPath === item.relative_path) {
+            metadataStatus.textContent = 'Reintento técnico en cola; se ejecutará en el próximo inventario.';
+          }
+        } catch (error) {
+          retry.disabled = false;
+          window.alert(`No se pudo poner en cola el reintento técnico: ${error.message}`);
+        }
+      });
+      metadataStatus.appendChild(retry);
+    }
   } catch (error) {
     if (selectedVideoPath === relativePath) metadataStatus.textContent = `Error al cargar la ficha: ${error.message}`;
   }
 }
 
 function tokenForEditing() {
+  if (accessSessionRequired) return '';
   if (!editToken) {
     editToken = window.prompt('Token de edición del servidor:');
     if (!editToken) return null;
@@ -777,16 +1047,22 @@ function tokenForEditing() {
   return editToken;
 }
 
+function editingHeaders(token, includeContentType = true) {
+  const headers = includeContentType ? { 'Content-Type': 'application/json' } : {};
+  if (!accessSessionRequired) headers.Authorization = `Bearer ${token}`;
+  return headers;
+}
+
 async function saveObservationIdentity(observationIndex, assignment) {
   const pathToEdit = selectedVideoPath;
   const expectedRevision = selectedMetadataRevision;
   if (!pathToEdit || !expectedRevision) return false;
   const token = tokenForEditing();
-  if (!token) return false;
+  if (token === null) return false;
   try {
     const response = await apiFetch(`${API_BASE}/api/metadata/person`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      headers: editingHeaders(token),
       body: JSON.stringify({ path: pathToEdit, analysis_revision: expectedRevision,
         observation_index: observationIndex, ...assignment })
     });
@@ -803,6 +1079,238 @@ async function saveObservationIdentity(observationIndex, assignment) {
   } catch (error) {
     window.alert(`No se pudo guardar la identificación: ${error.message}`);
     return false;
+  }
+}
+
+function facePreviewUrl(faceId) {
+  return `${API_BASE}/api/faces/${encodeURIComponent(faceId)}/preview`;
+}
+
+function faceCardTitle(face) {
+  return face.visual_title || String(face.relative_path || '').split('/').filter(Boolean).at(-1) || 'Video';
+}
+
+function faceTimeLabel(seconds) {
+  return `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
+}
+
+function renderFaceInbox() {
+  faceInboxGrid.replaceChildren();
+  for (const face of faceInboxItems) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `min-w-0 rounded-lg border p-2 text-left hover:bg-gray-700 ${
+      selectedFaceForReview?.id === face.id ? 'border-amber-400 bg-amber-950/30' : 'border-gray-700 bg-gray-900/50'
+    }`;
+    button.setAttribute('aria-label', `Revisar rostro de ${faceCardTitle(face)} en ${faceTimeLabel(face.at_seconds)}`);
+    const image = document.createElement('img');
+    image.className = 'aspect-square w-full rounded bg-black object-contain';
+    image.loading = 'lazy';
+    image.alt = `Rostro en ${faceCardTitle(face)} en ${faceTimeLabel(face.at_seconds)}`;
+    image.src = facePreviewUrl(face.id);
+    image.addEventListener('error', () => { image.alt = 'Vista previa no disponible'; }, { once: true });
+    const title = document.createElement('span');
+    title.className = 'mt-2 block truncate text-xs font-medium text-gray-200';
+    title.textContent = faceCardTitle(face);
+    const time = document.createElement('span');
+    time.className = 'block text-xs text-gray-400';
+    time.textContent = `Minuto ${faceTimeLabel(face.at_seconds)}`;
+    button.append(image, title, time);
+    button.addEventListener('click', () => selectFaceForReview(face));
+    faceInboxGrid.appendChild(button);
+  }
+  faceInboxStatus.textContent = faceInboxItems.length
+    ? `${faceInboxTotal.toLocaleString('es-AR')} rostros sin nombre · mostrando ${faceInboxItems.length}`
+    : 'No hay rostros pendientes en los videos ya procesados.';
+  faceLoadMore.classList.toggle('hidden', !faceInboxCursor || faceInboxItems.length >= faceInboxTotal);
+}
+
+async function loadFaceInbox(append = false) {
+  if (!append) {
+    faceInboxItems = [];
+    faceInboxCursor = 0;
+    faceInboxGrid.replaceChildren();
+    faceInboxStatus.textContent = 'Cargando rostros…';
+  }
+  const params = new URLSearchParams({ limit: '18' });
+  if (append && faceInboxCursor) params.set('after', String(faceInboxCursor));
+  try {
+    const response = await apiFetch(`${API_BASE}/api/faces/inbox?${params}`);
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    faceInboxItems.push(...(result.items || []));
+    faceInboxCursor = result.next_after_id || 0;
+    faceInboxTotal = result.total || 0;
+    if (!append && result.progress?.remaining && !faceInboxTotal) {
+      faceInboxStatus.textContent = `${result.progress.remaining.toLocaleString('es-AR')} videos pendientes de procesar localmente; todavía no hay rostros para revisar.`;
+      faceLoadMore.classList.add('hidden');
+      return;
+    }
+    renderFaceInbox();
+  } catch (error) {
+    faceInboxStatus.textContent = `No se pudo cargar la bandeja de rostros (${error.message}).`;
+  }
+}
+
+function addFaceNeighborCard(face, { selected = false, disabled = false, description = '' } = {}) {
+  const card = document.createElement('label');
+  card.className = 'min-w-0 rounded border border-gray-700 bg-gray-800 p-2';
+  const checkbox = document.createElement('input');
+  checkbox.type = 'checkbox';
+  checkbox.checked = selected;
+  checkbox.disabled = disabled;
+  checkbox.className = 'mb-2 mr-1 accent-amber-400';
+  checkbox.setAttribute('aria-label', `Seleccionar ${faceCardTitle(face)} en ${faceTimeLabel(face.at_seconds)} para asignar o ignorar`);
+  if (!disabled) checkbox.addEventListener('change', () => {
+    if (checkbox.checked) selectedFaceIds.add(face.id);
+    else selectedFaceIds.delete(face.id);
+    const count = selectedFaceIds.size;
+    faceAssignBtn.textContent = `Asignar identidad a ${count} ${count === 1 ? 'rostro' : 'rostros'}`;
+    faceRejectBtn.textContent = `Ignorar ${count} ${count === 1 ? 'rostro' : 'rostros'} sin identificar`;
+    faceRejectBtn.disabled = count === 0;
+  });
+  const image = document.createElement('img');
+  image.className = 'aspect-square w-full rounded bg-black object-contain';
+  image.loading = 'lazy';
+  image.alt = `Rostro de ${faceCardTitle(face)} en ${faceTimeLabel(face.at_seconds)}`;
+  image.src = facePreviewUrl(face.id);
+  const title = document.createElement('span');
+  title.className = 'mt-1 block truncate text-xs font-medium';
+  title.textContent = faceCardTitle(face);
+  const meta = document.createElement('span');
+  meta.className = 'block text-xs text-gray-400';
+  meta.textContent = description || `Minuto ${faceTimeLabel(face.at_seconds)}`;
+  card.append(checkbox, image, title, meta);
+  faceNeighborGrid.appendChild(card);
+}
+
+async function selectFaceForReview(face) {
+  selectedFaceForReview = face;
+  selectedFaceIds = new Set([face.id]);
+  faceNewPersonName.value = '';
+  faceAssignmentStatus.textContent = '';
+  faceAssignBtn.textContent = 'Asignar identidad a 1 rostro';
+  faceRejectBtn.textContent = 'Ignorar 1 rostro sin identificar';
+  faceRejectBtn.disabled = false;
+  faceAssignmentControls.classList.toggle('hidden', !canEditPeopleDirectory);
+  facePersonSelect.replaceChildren();
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = 'Elegir identidad';
+  facePersonSelect.appendChild(placeholder);
+  for (const person of knownPeople) {
+    const option = document.createElement('option');
+    option.value = String(person.id);
+    option.textContent = person.name;
+    facePersonSelect.appendChild(option);
+  }
+  faceSelectedStatus.textContent = `${faceCardTitle(face)} · minuto ${faceTimeLabel(face.at_seconds)} · detección ${Math.round(face.detection_score * 100)}%`;
+  faceNeighborGrid.replaceChildren();
+  addFaceNeighborCard(face, { selected: true, disabled: true, description: 'Rostro elegido' });
+  renderFaceInbox();
+  try {
+    const response = await apiFetch(`${API_BASE}/api/faces/${face.id}/neighbors?limit=12`);
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    const neighbors = result.items || [];
+    const nearestAssigned = neighbors.find(item => item.person_id);
+    if (nearestAssigned) {
+      facePersonSelect.value = String(nearestAssigned.person_id);
+      faceSelectedStatus.textContent += ` · más cercano a ${nearestAssigned.person_name} (similitud ${nearestAssigned.similarity.toFixed(3)}; requiere confirmación)`;
+    } else {
+      faceSelectedStatus.textContent += ' · sin coincidencia cercana con personas confirmadas';
+    }
+    for (const neighbor of neighbors) {
+      const description = `${neighbor.similarity.toFixed(3)}${neighbor.person_name ? ` · ${neighbor.person_name}` : ''}${neighbor.review_status === 'unassigned' ? ' · sin nombre' : ''}`;
+      addFaceNeighborCard(neighbor, { description });
+    }
+    if (!neighbors.length) {
+      const empty = document.createElement('p');
+      empty.className = 'col-span-full text-xs text-gray-500';
+      empty.textContent = 'Todavía no hay otros embeddings faciales para comparar.';
+      faceNeighborGrid.appendChild(empty);
+    }
+  } catch (error) {
+    faceAssignmentStatus.textContent = `No se pudieron buscar parecidos (${error.message}).`;
+  }
+}
+
+async function openFaceReview() {
+  try {
+    const peopleResponse = await apiFetch(`${API_BASE}/api/people`);
+    if (!peopleResponse.ok) throw new Error(`HTTP ${peopleResponse.status}`);
+    const peopleData = await peopleResponse.json();
+    knownPeople = peopleData.items || [];
+    canEditPeopleDirectory = Boolean(peopleData.can_edit_people);
+    faceReviewDialog.showModal();
+    await loadFaceInbox(false);
+  } catch (error) {
+    window.alert(`No se pudo abrir la revisión de rostros: ${error.message}`);
+  }
+}
+
+async function assignSelectedFaces() {
+  if (!selectedFaceIds.size) return;
+  const token = tokenForEditing();
+  if (token === null) return;
+  const personName = faceNewPersonName.value.trim();
+  const personId = facePersonSelect.value ? Number(facePersonSelect.value) : null;
+  if (!personName && !personId) {
+    faceAssignmentStatus.textContent = 'Elegí una persona o escribí un nombre nuevo.';
+    return;
+  }
+  faceAssignBtn.disabled = true;
+  faceAssignmentStatus.textContent = 'Guardando identidad…';
+  try {
+    const response = await apiFetch(`${API_BASE}/api/faces/assign`, {
+      method: 'POST', headers: editingHeaders(token),
+      body: JSON.stringify({ face_ids: [...selectedFaceIds], ...(personName ? { person_name: personName } : { person_id: personId }) })
+    });
+    if (response.status === 401) editToken = null;
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    knownPeople = result.items || knownPeople;
+    const previousVideo = selectedVideoPath;
+    faceAssignmentStatus.textContent = `Identidad asignada a ${result.assigned} rostros.`;
+    selectedFaceForReview = null;
+    selectedFaceIds = new Set();
+    faceRejectBtn.disabled = true;
+    faceRejectBtn.textContent = 'Ignorar rostros seleccionados';
+    await loadFaceInbox(false);
+    if (previousVideo && (result.video_ids || []).some(id => Number(id) === Number(selectedMetadataId))) {
+      await loadMetadata(previousVideo);
+    }
+  } catch (error) {
+    faceAssignmentStatus.textContent = `No se pudo asignar la identidad: ${error.message}`;
+  } finally {
+    faceAssignBtn.disabled = false;
+  }
+}
+
+async function rejectSelectedFace() {
+  if (!selectedFaceForReview || !selectedFaceIds.size) return;
+  const selectedCount = selectedFaceIds.size;
+  if (!window.confirm(`Se eliminarán los embeddings de las detecciones seleccionadas que aún no tengan una identidad confirmada. Las identidades confirmadas se conservarán. Si se vuelve a indexar este video con la misma versión del índice facial, las detecciones ignoradas seguirán excluidas mientras el video no cambie. ¿Continuar?`)) return;
+  const token = tokenForEditing();
+  if (token === null) return;
+  faceRejectBtn.disabled = true;
+  try {
+    const response = await apiFetch(`${API_BASE}/api/faces/reject`, {
+      method: 'POST', headers: editingHeaders(token),
+      body: JSON.stringify({ face_ids: [...selectedFaceIds] })
+    });
+    if (response.status === 401) editToken = null;
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    selectedFaceForReview = null;
+    selectedFaceIds = new Set();
+    faceNeighborGrid.replaceChildren();
+    faceSelectedStatus.textContent = `${result.rejected || 0} rostro(s) ignorado(s); sus embeddings se eliminaron y no volverán a aparecer al reindexar este video con la misma versión del índice.`;
+    await loadFaceInbox(false);
+  } catch (error) {
+    faceAssignmentStatus.textContent = `No se pudo ignorar el rostro: ${error.message}`;
+  } finally {
+    faceRejectBtn.disabled = selectedFaceIds.size === 0;
   }
 }
 
@@ -917,11 +1425,11 @@ async function renameDirectoryPerson(person) {
   const name = window.prompt(`Nuevo nombre para ${person.name}:`, person.name);
   if (name == null || name.trim() === person.name) return;
   const token = tokenForEditing();
-  if (!token) return;
+  if (token === null) return;
   try {
     const response = await apiFetch(`${API_BASE}/api/people/${person.id}`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      headers: editingHeaders(token),
       body: JSON.stringify({ name: name.trim() })
     });
     if (response.status === 401) editToken = null;
@@ -950,11 +1458,11 @@ async function mergeDirectoryPerson(source, targetId) {
   }
   if (!window.confirm(`Mover las asignaciones de “${source.name}” a “${target.name}”. Se guardará la fusión y se podrá deshacer desde este directorio. ¿Continuar?`)) return;
   const token = tokenForEditing();
-  if (!token) return;
+  if (token === null) return;
   try {
     const response = await apiFetch(`${API_BASE}/api/people/${source.id}/merge`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      headers: editingHeaders(token),
       body: JSON.stringify({ target_person_id: target.id })
     });
     if (response.status === 401) editToken = null;
@@ -1004,11 +1512,11 @@ function renderPersonMergeHistory() {
 async function undoDirectoryMerge(merge) {
   if (!window.confirm(`Deshacer la fusión de “${merge.source_name}” en “${merge.target_name}”? Las asignaciones que se hayan cambiado después se conservarán.`)) return;
   const token = tokenForEditing();
-  if (!token) return;
+  if (token === null) return;
   try {
     const response = await apiFetch(`${API_BASE}/api/people/merges/${merge.id}/undo`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${token}` }
+      headers: editingHeaders(token, false)
     });
     if (response.status === 401) editToken = null;
     const result = await response.json().catch(() => ({}));
@@ -1022,9 +1530,60 @@ async function undoDirectoryMerge(merge) {
   }
 }
 
+function renderFaceIdentityResults(item) {
+  const identities = item.identified_faces || [];
+  faceIdentityResults.replaceChildren();
+  faceIdentityPanel.classList.toggle('hidden', identities.length === 0);
+  for (const identity of identities) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'rounded-full border border-amber-700/70 bg-amber-900/40 px-3 py-1 text-xs text-amber-100 hover:bg-amber-800';
+    button.textContent = `${identity.name} · ${identity.appearances} ${identity.appearances === 1 ? 'rostro' : 'rostros'}`;
+    button.setAttribute('aria-label', `Buscar videos de ${identity.name}`);
+    button.addEventListener('click', () => {
+      selectedPersonId = identity.person_id;
+      searchInput.value = identity.name;
+      mobileSearchInput.value = identity.name;
+      updateSearch();
+    });
+    faceIdentityResults.appendChild(button);
+  }
+}
+
 function renderVisualMetadata(item) {
+  renderFaceIdentityResults(item);
   if (item.visual_status !== 'done') {
-    if (item.visual_status === 'failed') metadataStatus.textContent += ' · Análisis visual fallido';
+    if (item.visual_status === 'failed') {
+      metadataStatus.textContent = 'Análisis visual fallido. ';
+      if (item.can_edit_people) {
+        const retry = document.createElement('button');
+        retry.type = 'button';
+        retry.className = 'rounded border border-gray-500 px-2 py-1 text-xs hover:bg-gray-700';
+        retry.textContent = 'Poner en cola para reintentar';
+        retry.addEventListener('click', async () => {
+          const token = tokenForEditing();
+          if (token === null) return;
+          retry.disabled = true;
+          try {
+            const response = await apiFetch(`${API_BASE}/api/metadata/visual/retry`, {
+              method: 'POST',
+              headers: editingHeaders(token),
+              body: JSON.stringify({ path: item.relative_path })
+            });
+            if (response.status === 401) editToken = null;
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+            if (selectedVideoPath === item.relative_path) {
+              metadataStatus.textContent = 'Reintento en cola; se ejecutará en el próximo lote visual.';
+            }
+          } catch (error) {
+            retry.disabled = false;
+            window.alert(`No se pudo poner en cola el reintento: ${error.message}`);
+          }
+        });
+        metadataStatus.appendChild(retry);
+      }
+    }
     return;
   }
   visualMetadata.classList.remove('hidden');
@@ -1055,23 +1614,36 @@ function renderIdentityAssignments(item) {
       const description = previous.description || 'Observación sin descripción';
       const time = `${Math.floor(previous.at_seconds / 60)}:${String(Math.floor(previous.at_seconds % 60)).padStart(2, '0')}`;
       const summary = document.createElement('p');
-      summary.textContent = `${previous.name}: ${description} (${time})`;
+      const identityNames = (previous.identities || [{ name: previous.name }]).map(person => person.name).join(', ');
+      summary.textContent = `${identityNames}: ${description} (${time})`;
       entry.appendChild(summary);
+      const previousEvidenceLabel = document.createElement('p');
+      previousEvidenceLabel.className = 'mt-2 text-xs font-medium text-gray-300';
+      previousEvidenceLabel.textContent = 'Fotograma de la ficha anterior';
+      entry.appendChild(previousEvidenceLabel);
       appendStaleEvidenceThumbnail(entry, item, previous);
+      if (previous.suggested_matches?.length) {
+        const match = previous.suggested_matches[0];
+        const suggestion = document.createElement('p');
+        suggestion.className = 'mt-2 text-xs text-sky-200';
+        const matchTime = `${Math.floor(match.at_seconds / 60)}:${String(Math.floor(match.at_seconds % 60)).padStart(2, '0')}`;
+        suggestion.textContent = `Posible coincidencia orientativa (${match.score}/100, no es una probabilidad): ${match.description} (${matchTime}). Revisá la evidencia antes de confirmar.`;
+        entry.appendChild(suggestion);
+      }
       if (item.can_edit_people) {
         const dismiss = document.createElement('button');
         dismiss.type = 'button';
         dismiss.className = 'mt-2 rounded border border-gray-600 px-3 py-2 text-xs text-gray-200 hover:bg-gray-700';
         dismiss.textContent = 'Resolver sin reasignar';
         dismiss.addEventListener('click', async () => {
-          if (!window.confirm(`Marcar la identificación anterior de ${previous.name} como revisada sin asignarla a una observación actual? Se conservará en el historial.`)) return;
+          if (!window.confirm(`Marcar las identificaciones anteriores de ${identityNames} como revisadas sin asignarlas a una observación actual? Se conservarán en el historial.`)) return;
           const pathToReview = selectedVideoPath;
           const token = tokenForEditing();
-          if (!token) return;
+          if (token === null) return;
           try {
             const response = await apiFetch(`${API_BASE}/api/metadata/person/review-stale`, {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+              headers: editingHeaders(token),
               body: JSON.stringify({ path: pathToReview,
                 analysis_revision: previous.analysis_revision,
                 observation_index: previous.observation_index })
@@ -1090,18 +1662,21 @@ function renderIdentityAssignments(item) {
         const controls = document.createElement('div');
         controls.className = 'mt-2 flex flex-col gap-2';
         const identitySelect = document.createElement('select');
+        identitySelect.multiple = true;
+        identitySelect.size = Math.min(4, Math.max(2, knownPeople.length));
         identitySelect.className = 'w-full rounded border border-amber-800 bg-gray-900 px-2 py-2 text-sm text-white';
-        identitySelect.setAttribute('aria-label', `Elegir identidad para la observación anterior de ${previous.name}`);
+        identitySelect.setAttribute('aria-label', `Elegir identidades para la observación anterior: ${identityNames}`);
         for (const person of knownPeople) {
           const option = document.createElement('option');
           option.value = String(person.id);
           option.textContent = person.name;
           identitySelect.appendChild(option);
         }
-        identitySelect.value = String(previous.person_id);
+        const oldIds = new Set(previous.person_ids.map(String));
+        for (const option of identitySelect.options) option.selected = oldIds.has(option.value);
         const select = document.createElement('select');
         select.className = 'min-w-0 flex-1 rounded border border-amber-800 bg-gray-900 px-2 py-2 text-sm text-white';
-        select.setAttribute('aria-label', `Elegir observación actual para vincular con ${previous.name}`);
+        select.setAttribute('aria-label', `Elegir observación actual para vincular con ${identityNames}`);
         const placeholder = document.createElement('option');
         placeholder.value = '';
         placeholder.textContent = 'Elegí una observación de la ficha actual…';
@@ -1112,19 +1687,46 @@ function renderIdentityAssignments(item) {
           option.textContent = `${observation.description} (${Math.floor(observation.at_seconds / 60)}:${String(Math.floor(observation.at_seconds % 60)).padStart(2, '0')})`;
           select.appendChild(option);
         });
+        if (previous.suggested_matches?.length) {
+          select.value = String(previous.suggested_matches[0].observation_index);
+        }
+        const currentEvidence = document.createElement('div');
+        currentEvidence.className = 'rounded border border-gray-700 bg-gray-950/50 p-2';
+        currentEvidence.setAttribute('aria-live', 'polite');
+        const renderCurrentEvidence = () => {
+          currentEvidence.replaceChildren();
+          const label = document.createElement('p');
+          label.className = 'mb-1 text-xs font-medium text-gray-300';
+          label.textContent = 'Fotograma actual para comparar';
+          currentEvidence.appendChild(label);
+          const observation = select.value === '' ? null : observations[Number(select.value)];
+          if (!observation || !item.visual_evidence?.some(evidence => evidence.at_seconds === observation.at_seconds)) {
+            const unavailable = document.createElement('p');
+            unavailable.className = 'text-xs text-gray-500';
+            unavailable.textContent = observation ? 'No hay fotograma de evidencia para esta observación.' : 'Elegí una observación para ver su fotograma.';
+            currentEvidence.appendChild(unavailable);
+            return;
+          }
+          appendEvidenceThumbnail(currentEvidence, item, observation.at_seconds, observation.description);
+        };
+        renderCurrentEvidence();
         const apply = document.createElement('button');
         apply.type = 'button';
         apply.className = 'rounded bg-amber-700 px-3 py-2 text-sm hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-50';
         apply.textContent = 'Reasignar';
         apply.disabled = true;
-        const updateApplyState = () => { apply.disabled = select.value === '' || identitySelect.value === ''; };
-        select.addEventListener('change', updateApplyState);
+        const updateApplyState = () => { apply.disabled = select.value === '' || identitySelect.selectedOptions.length === 0; };
+        select.addEventListener('change', () => {
+          updateApplyState();
+          renderCurrentEvidence();
+        });
         identitySelect.addEventListener('change', updateApplyState);
+        updateApplyState();
         apply.addEventListener('click', async () => {
           if (select.value === '') return;
           apply.disabled = true;
           const saved = await saveObservationIdentity(Number(select.value), {
-            person_id: Number(identitySelect.value),
+            person_ids: [...identitySelect.selectedOptions].map(option => Number(option.value)),
             stale_observation: {
               analysis_revision: previous.analysis_revision,
               observation_index: previous.observation_index
@@ -1132,7 +1734,7 @@ function renderIdentityAssignments(item) {
           });
           if (!saved) apply.disabled = false;
         });
-        controls.append(identitySelect, select, apply);
+        controls.append(identitySelect, select, currentEvidence, apply);
         entry.appendChild(controls);
       }
       list.appendChild(entry);
@@ -1152,10 +1754,16 @@ function renderIdentityAssignments(item) {
     list.className = 'mt-2 max-h-48 space-y-2 overflow-y-auto text-xs text-gray-400';
     for (const change of history) {
       const entry = document.createElement('li');
-      const from = change.action === 'reconciled'
+      const namesFromHistory = value => {
+        try { return JSON.parse(value || '[]').map(person => person.name).filter(Boolean).join(', '); }
+        catch { return ''; }
+      };
+      const previousNames = namesFromHistory(change.previous_people_json);
+      const nextNames = namesFromHistory(change.people_json);
+      const from = previousNames || (change.action === 'reconciled'
         ? `Ficha anterior: ${change.stale_person_name || 'Sin identificar'}; observación actual: ${change.previous_name || 'Sin identificar'}`
-        : change.previous_name || 'Sin identificar';
-      const to = change.person_name || 'Sin identificar';
+        : change.previous_name || 'Sin identificar');
+      const to = nextNames || change.person_name || 'Sin identificar';
       const action = change.action === 'reconciled' ? 'Reconciliada'
         : change.action === 'assigned' ? 'Identificada'
         : change.action === 'removed' ? 'Quitada'
@@ -1175,7 +1783,7 @@ function renderIdentityAssignments(item) {
     return;
   }
   identityHelp.textContent = item.can_edit_people
-    ? 'La identificación es manual: elegí una persona conocida o creá una nueva. La asociación queda guardada para este video y se puede buscar.'
+    ? 'La identificación es manual: elegí una o varias personas para esta observación, luego guardá la selección. Usá Ctrl o ⌘ para seleccionar varias; se pueden buscar por separado.'
     : 'Las descripciones son sugerencias visuales. La identificación requiere habilitar edición.';
 
   observations.forEach((observation, index) => {
@@ -1192,45 +1800,53 @@ function renderIdentityAssignments(item) {
     appendEvidenceThumbnail(row, item, observation.at_seconds, observation.description);
 
     const assigned = item.identified_people?.[index];
+    const assignedAll = item.identified_people_all?.[index] || (assigned ? [assigned] : []);
     if (!item.can_edit_people) {
       if (assigned?.name) {
         const label = document.createElement('span');
         label.className = 'text-xs text-green-300';
-        label.textContent = `Identificada: ${assigned.name}`;
+        label.textContent = `Identificada: ${assignedAll.map(person => person.name).join(', ')}`;
         row.appendChild(label);
       }
     } else {
       const select = document.createElement('select');
+      select.multiple = true;
+      select.size = Math.min(5, Math.max(3, knownPeople.length));
       select.className = 'w-full rounded border border-gray-600 bg-gray-800 px-2 py-2 text-sm';
-      select.setAttribute('aria-label', 'Asignar identidad a esta persona observada');
-      const unknown = document.createElement('option');
-      unknown.value = '';
-      unknown.textContent = 'Sin identificar';
-      select.appendChild(unknown);
+      select.setAttribute('aria-label', 'Asignar una o varias identidades a esta observación');
       for (const person of knownPeople) {
         const option = document.createElement('option');
         option.value = String(person.id);
         option.textContent = person.name;
         select.appendChild(option);
       }
-      const create = document.createElement('option');
-      create.value = '__new__';
-      create.textContent = '+ Crear persona…';
-      select.appendChild(create);
-      select.value = assigned?.id ? String(assigned.id) : '';
-      select.addEventListener('change', async () => {
-        const selection = select.value;
-        if (selection === '__new__') {
-          select.value = assigned?.id ? String(assigned.id) : '';
-          const name = window.prompt('Nombre de esta persona:');
-          if (name?.trim()) await saveObservationIdentity(index, { person_name: name.trim() });
-        } else if (selection === '') {
-          await saveObservationIdentity(index, { person_id: null });
-        } else {
-          await saveObservationIdentity(index, { person_id: Number(selection) });
-        }
-      });
+      const assignedIds = new Set(assignedAll.map(person => String(person.id)));
+      for (const option of select.options) option.selected = assignedIds.has(option.value);
       row.appendChild(select);
+      const savePeople = document.createElement('button');
+      savePeople.type = 'button';
+      savePeople.className = 'rounded bg-blue-700 px-3 py-2 text-xs hover:bg-blue-600';
+      savePeople.textContent = 'Guardar selección';
+      savePeople.addEventListener('click', async () => {
+        savePeople.disabled = true;
+        const saved = await saveObservationIdentity(index, {
+          person_ids: [...select.selectedOptions].map(option => Number(option.value))
+        });
+        if (!saved) savePeople.disabled = false;
+      });
+      row.appendChild(savePeople);
+      const createPerson = document.createElement('button');
+      createPerson.type = 'button';
+      createPerson.className = 'rounded border border-gray-600 px-3 py-2 text-xs';
+      createPerson.textContent = 'Crear persona y agregar';
+      createPerson.addEventListener('click', async () => {
+        const name = window.prompt('Nombre de esta persona:');
+        if (!name?.trim()) return;
+        await saveObservationIdentity(index, {
+          person_ids: [...select.selectedOptions].map(option => Number(option.value)), person_name: name.trim()
+        });
+      });
+      row.appendChild(createPerson);
     }
     visualPeople.appendChild(row);
   });
@@ -1246,6 +1862,11 @@ function appendEvidenceThumbnail(container, item, atSeconds, description) {
   image.className = 'h-20 w-32 rounded object-contain bg-black';
   image.loading = 'lazy';
   image.alt = `Fotograma de evidencia en el segundo ${atSeconds}: ${description}`;
+  image.addEventListener('error', () => {
+    button.replaceWith(Object.assign(document.createElement('span'), {
+      className: 'text-xs text-gray-500', textContent: 'Fotograma de evidencia no disponible.'
+    }));
+  }, { once: true });
   const params = new URLSearchParams({ path: item.relative_path, revision: item.visual_revision, at_seconds: String(atSeconds) });
   image.src = `${API_BASE}/api/metadata/evidence?${params}`;
   button.appendChild(image);
@@ -1272,7 +1893,11 @@ function appendStaleEvidenceThumbnail(container, item, previous) {
   const params = new URLSearchParams({ path: item.relative_path,
     revision: previous.analysis_revision, at_seconds: String(previous.at_seconds) });
   image.src = `${API_BASE}/api/metadata/evidence?${params}`;
-  image.addEventListener('error', () => button.remove(), { once: true });
+  image.addEventListener('error', () => {
+    button.replaceWith(Object.assign(document.createElement('span'), {
+      className: 'mt-2 block text-xs text-gray-500', textContent: 'Fotograma anterior no disponible.'
+    }));
+  }, { once: true });
   button.appendChild(image);
   button.addEventListener('click', () => {
     const expanded = image.classList.toggle('max-h-80');

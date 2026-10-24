@@ -5,7 +5,8 @@ const { execFile } = require('child_process');
 const { promisify } = require('util');
 const {
   db, buildVisualSearchText, withJobLock, setWorkerConfiguration, setWorkerActivity,
-  reserveVisualDailyRequest, getVisualProviderControl, setVisualProviderControl, clearVisualProviderControl
+  reserveVisualDailyRequest, getVisualProviderControl, setVisualProviderControl, nativeMetadataSearchText,
+  clearVisualProviderControl, getVisualMonthlySpend, getVisualCostEstimate, getAutomationControl
 } = require('./metadata-store');
 const { visualConfiguration } = require('./config');
 
@@ -23,10 +24,17 @@ if (parsedApiUrl.protocol !== 'https:' || parsedApiUrl.username || parsedApiUrl.
 }
 const PROMPT_VERSION = 'visual-v2';
 const MAX_VISUAL = CONFIG.max_visual;
+const MAX_VISUAL_FRAMES = CONFIG.max_visual_frames;
 const MAX_VISUAL_ATTEMPTS = CONFIG.max_visual_attempts;
 const MAX_VISUAL_REQUESTS_PER_DAY = CONFIG.max_visual_requests_per_day;
+const MAX_VISUAL_COST_PER_MONTH_USD = CONFIG.max_visual_cost_per_month_usd;
+const MAX_VISUAL_COST_RESERVE_PER_REQUEST_USD = CONFIG.max_visual_cost_reserve_per_request_usd;
 const RETRY_FAILED = CONFIG.retry_visual_failed;
 const TARGET_ID = CONFIG.visual_video_id;
+
+function visualRequestReserveUsd() {
+  return getVisualCostEstimate(MODEL, MAX_VISUAL_COST_RESERVE_PER_REQUEST_USD).reserve_usd;
+}
 
 function providerConfigurationFingerprint(apiKey) {
   return crypto.createHash('sha256').update(`${API_URL}\0${MODEL}\0${apiKey}`).digest('hex');
@@ -54,10 +62,13 @@ const responseSchema = {
   additionalProperties: false
 };
 
-function sampleTimes(durationMs) {
-  if (!durationMs || durationMs < 2000) return [0];
+function sampleTimes(durationMs, maximum = MAX_VISUAL_FRAMES) {
+  if (!durationMs || durationMs < 2000 || maximum === 1) return [0];
   const seconds = durationMs / 1000;
-  return [...new Set([0.08, 0.35, 0.65, 0.92].map(fraction => Math.floor(seconds * fraction)))];
+  const count = Math.min(maximum, Math.max(2, Math.ceil(seconds / 1800) + 2));
+  const times = Array.from({ length: count }, (_, index) =>
+    Math.floor(seconds * (0.05 + 0.9 * index / (count - 1))));
+  return [...new Set(times)];
 }
 
 async function safeVideoPath(relativePath) {
@@ -173,7 +184,34 @@ async function readLimitedResponse(response, maxBytes) {
   return Buffer.concat(chunks, totalBytes).toString('utf8');
 }
 
+function summarizeProviderError(body) {
+  let detail = String(body).slice(0, 300);
+  try {
+    const parsed = JSON.parse(body);
+    const error = parsed.error;
+    if (typeof error?.message === 'string') detail = error.message;
+    const funnel = error?.metadata?.routing_funnel;
+    if (Array.isArray(funnel) && funnel.length) {
+      const stages = funnel.slice(0, 8).map(stage => Object.entries(stage)
+        .filter(([, value]) => ['string', 'number', 'boolean'].includes(typeof value))
+        .map(([key, value]) => `${key}=${String(value).slice(0, 100)}`).join(','))
+        .filter(Boolean).join(' > ');
+      if (stages) detail += ` [routing_funnel: ${stages}]`;
+    }
+  } catch { /* Keep a bounded text snippet for non-JSON error bodies. */ }
+  return detail.slice(0, 900);
+}
+
 async function describeFrames(frames, apiKey) {
+  const monthlySpendBeforeRequest = getVisualMonthlySpend();
+  const requestReserve = visualRequestReserveUsd();
+  if (MAX_VISUAL_COST_PER_MONTH_USD > 0 &&
+      (monthlySpendBeforeRequest >= MAX_VISUAL_COST_PER_MONTH_USD ||
+       monthlySpendBeforeRequest + requestReserve > MAX_VISUAL_COST_PER_MONTH_USD)) {
+    const error = new Error('Visual monthly cost reserve exhausted');
+    error.code = 'VISUAL_MONTHLY_BUDGET_EXHAUSTED';
+    throw error;
+  }
   const content = [{ type: 'text', text: 'Estas son imágenes puntuales del mismo video, en orden temporal. Usa el índice de cada fotograma para respaldar eventos, personas y pistas de fecha.' }];
   for (const [index, frame] of frames.entries()) {
     content.push({ type: 'text', text: `Fotograma ${index + 1}, segundo ${frame.at_seconds}:` });
@@ -207,9 +245,9 @@ async function describeFrames(frames, apiKey) {
         type: 'json_schema',
         json_schema: { name: 'video_visual_sheet', strict: true, schema: responseSchema }
       },
-      max_tokens: 2000
+      max_tokens: 4000
       }),
-      signal: AbortSignal.timeout(120000)
+      signal: AbortSignal.timeout(CONFIG.visual_request_timeout_ms)
     });
   } catch (error) {
     const networkError = new Error(error.message || 'Provider request failed');
@@ -218,7 +256,7 @@ async function describeFrames(frames, apiKey) {
   }
   if (!response.ok) {
     const body = await readLimitedResponse(response, 16 * 1024);
-    throw new Error(`OpenRouter HTTP ${response.status}: ${body.slice(0, 300)}`);
+    throw new Error(`OpenRouter HTTP ${response.status}: ${summarizeProviderError(body)}`);
   }
   const responseText = await readLimitedResponse(response, 1024 * 1024);
   let data;
@@ -232,7 +270,13 @@ async function describeFrames(frames, apiKey) {
       ? message.content.filter(item => item.type === 'text').map(item => item.text).join('')
       : '';
   if (!outputText) throw new Error('OpenRouter returned no structured text');
-  return { result: normalizeResult(JSON.parse(outputText), frames), usage: data.usage || null };
+  let parsedOutput;
+  try { parsedOutput = JSON.parse(outputText); }
+  catch {
+    const finishReason = data.choices?.[0]?.finish_reason || 'unknown';
+    throw new Error(`Invalid model response: structured output was not valid JSON (finish_reason=${finishReason}, chars=${outputText.length})`);
+  }
+  return { result: normalizeResult(parsedOutput, frames), usage: data.usage || null };
 }
 
 async function analyzeVideo(row, apiKey) {
@@ -246,7 +290,9 @@ async function analyzeVideo(row, apiKey) {
     const { fullPath, stat } = await safeVideoPath(row.relative_path);
     if (`${stat.size}:${Math.round(stat.mtimeMs)}` !== row.fingerprint) throw new Error('Video changed since inventory; scan it again');
     const frames = [];
-    for (const atSeconds of sampleTimes(row.duration_ms)) {
+    const selectedTimes = sampleTimes(row.duration_ms);
+    const sampling = { method: 'duration', sampled_at_seconds: selectedTimes };
+    for (const atSeconds of selectedTimes) {
       try {
         frames.push({ at_seconds: atSeconds, image: await extractFrame(fullPath, atSeconds) });
       } catch (error) {
@@ -254,14 +300,29 @@ async function analyzeVideo(row, apiKey) {
       }
     }
     if (!frames.length) throw new Error('No frames could be extracted');
+    if (getAutomationControl().paused) {
+      db.prepare(`UPDATE videos SET visual_status = 'pending', visual_attempts = MAX(visual_attempts - 1, 0),
+          visual_error = NULL, visual_error_class = NULL, visual_next_attempt_at = NULL
+        WHERE id = ? AND fingerprint = ? AND visual_status = 'running'`).run(row.id, row.fingerprint);
+      setWorkerActivity('visual-analyzer', {
+        phase: 'pausado', videoId: row.id, path: row.relative_path,
+        result: 'No se envió el video al proveedor; quedó pendiente para reanudar'
+      });
+      return true;
+    }
     setWorkerActivity('visual-analyzer', { videoId: row.id, path: row.relative_path, phase: 'analizando con el proveedor' });
     const { result, usage } = await describeFrames(frames, apiKey);
     const finalStat = await fs.promises.stat(fullPath);
     if (`${finalStat.size}:${Math.round(finalStat.mtimeMs)}` !== row.fingerprint) throw new Error('Video changed during analysis');
+    const faceAssignedNames = db.prepare(`SELECT DISTINCT people.name FROM face_observations
+      JOIN people ON people.id = face_observations.person_id
+      WHERE video_id = ? AND fingerprint = ? AND review_status = 'confirmed'`)
+      .all(row.id, row.fingerprint).map(item => item.name);
     const searchText = buildVisualSearchText({
       events: result.events, people: result.people, places: result.places,
       keywords: result.keywords, dateClues: result.date_clues,
-      confirmedPeople: JSON.parse(row.confirmed_people_json)
+      confirmedPeople: [...JSON.parse(row.confirmed_people_json), ...faceAssignedNames],
+      location: nativeMetadataSearchText(row)
     });
     const revision = crypto.randomUUID();
     let evidence = [];
@@ -276,7 +337,7 @@ async function analyzeVideo(row, apiKey) {
       visual_people_json = @people, visual_events_json = @events,
       visual_places_json = @places, visual_keywords_json = @keywords,
       visual_date_clues_json = @date_clues, visual_search_text = @search_text,
-      visual_evidence_json = @evidence,
+      visual_evidence_json = @evidence, visual_sampling_json = @sampling,
       visual_model = @model, visual_prompt_version = @prompt_version,
       visual_usage_json = @usage, visual_fingerprint = @fingerprint, visual_revision = @revision,
       visual_error = NULL, visual_error_class = NULL, visual_next_attempt_at = NULL,
@@ -287,6 +348,7 @@ async function analyzeVideo(row, apiKey) {
       people: JSON.stringify(result.people), events: JSON.stringify(result.events),
       places: JSON.stringify(result.places), keywords: JSON.stringify(result.keywords),
       date_clues: JSON.stringify(result.date_clues), search_text: searchText, model: MODEL,
+      sampling: JSON.stringify(sampling),
       evidence: JSON.stringify(evidence), prompt_version: PROMPT_VERSION,
       usage: JSON.stringify(usage || {}), revision
       });
@@ -309,18 +371,33 @@ async function analyzeVideo(row, apiKey) {
       });
       return false;
     }
+    if (error.code === 'VISUAL_MONTHLY_BUDGET_EXHAUSTED') {
+      db.prepare(`UPDATE videos SET visual_status = 'pending', visual_attempts = MAX(visual_attempts - 1, 0),
+          visual_error = NULL, visual_error_class = NULL, visual_next_attempt_at = NULL
+        WHERE id = ? AND fingerprint = ? AND visual_status = 'running'`).run(row.id, row.fingerprint);
+      const spend = getVisualMonthlySpend();
+      setWorkerActivity('visual-analyzer', {
+        phase: 'reserva de presupuesto mensual agotada', videoId: row.id, path: row.relative_path,
+        result: `Costo reportado: USD ${spend.toFixed(4)}; reserva estimada por solicitud: USD ${visualRequestReserveUsd().toFixed(4)}; límite: USD ${MAX_VISUAL_COST_PER_MONTH_USD.toFixed(4)}`
+      });
+      return false;
+    }
     const message = String(error.message).slice(0, 1000);
     const authenticationFailure = /^OpenRouter HTTP (401|403)\b/.test(message);
     const providerRateLimit = /^OpenRouter HTTP 429\b/.test(message);
     const providerServerFailure = /^OpenRouter HTTP 5\d\d\b/.test(message);
-    const providerConfigurationFailure = /^OpenRouter HTTP 4\d\d\b/.test(message) && !providerRateLimit;
+    const freeRouterNoCompatibleEndpoint = MODEL === 'openrouter/free' &&
+      /^OpenRouter HTTP 404\b/.test(message) && /no endpoints found that can handle the requested parameters/i.test(message);
+    const providerConfigurationFailure = /^OpenRouter HTTP 4\d\d\b/.test(message) && !providerRateLimit && !freeRouterNoCompatibleEndpoint;
+    const providerRouteUnavailable = providerServerFailure || freeRouterNoCompatibleEndpoint;
     const providerNetworkFailure = error.code === 'VISUAL_PROVIDER_NETWORK';
-    const permanentFailure = (/^OpenRouter HTTP 4\d\d\b/.test(message) && !providerRateLimit) ||
-      message.startsWith('OpenRouter refusal:') || message.startsWith('Invalid model response:') ||
+    const permanentFailure = (/^OpenRouter HTTP 4\d\d\b/.test(message) && !providerRateLimit && !freeRouterNoCompatibleEndpoint) ||
+      message.startsWith('OpenRouter refusal:') ||
       message.includes('Video changed');
     const retryable = !permanentFailure;
-    const exhausted = retryable && attemptNumber >= MAX_VISUAL_ATTEMPTS;
-    const baseDelaySeconds = providerRateLimit ? 300 : 60;
+    const providerTransientFailure = providerRateLimit || providerRouteUnavailable || providerNetworkFailure;
+    const exhausted = retryable && !providerTransientFailure && attemptNumber >= MAX_VISUAL_ATTEMPTS;
+    const baseDelaySeconds = providerRouteUnavailable ? 3600 : providerRateLimit ? 300 : 60;
     const delaySeconds = retryable && !exhausted
       ? Math.min(baseDelaySeconds * (2 ** Math.min(attemptNumber - 1, 10)), 86400)
       : null;
@@ -328,19 +405,23 @@ async function analyzeVideo(row, apiKey) {
       .toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, '');
     const errorClass = authenticationFailure ? 'provider_auth'
       : providerRateLimit ? 'provider_rate_limit'
-        : providerServerFailure ? 'provider_unavailable'
+        : providerRouteUnavailable ? 'provider_unavailable'
           : exhausted ? 'attempt_limit' : permanentFailure ? 'permanent' : 'transient';
-    db.prepare(`UPDATE videos SET visual_status = 'failed', visual_error = ?, visual_error_class = ?,
-        visual_next_attempt_at = ? WHERE id = ? AND fingerprint = ? AND visual_status = 'running'`)
-      .run(message, errorClass, retryAt, row.id, row.fingerprint);
-    if (authenticationFailure || providerConfigurationFailure || providerRateLimit || providerServerFailure || providerNetworkFailure) {
+    db.prepare(`UPDATE videos SET visual_status = 'failed',
+        visual_attempts = CASE WHEN ? = 1 THEN MAX(visual_attempts - 1, 0) ELSE visual_attempts END,
+        visual_error = ?, visual_error_class = ?, visual_next_attempt_at = ?
+      WHERE id = ? AND fingerprint = ? AND visual_status = 'running'`)
+      .run(providerTransientFailure ? 1 : 0, message, errorClass, retryAt, row.id, row.fingerprint);
+    if (authenticationFailure || providerConfigurationFailure || providerRateLimit || providerRouteUnavailable || providerNetworkFailure) {
       const status = message.match(/^OpenRouter HTTP (\d{3})\b/)?.[1];
       const reason = authenticationFailure ? `OpenRouter HTTP ${status}: revisar clave/permisos`
         : providerConfigurationFailure ? `OpenRouter HTTP ${status}: revisar endpoint/modelo/parámetros`
           : providerRateLimit ? 'OpenRouter HTTP 429: cuota o límite de velocidad'
-            : providerServerFailure ? `OpenRouter HTTP ${status}: proveedor no disponible`
+            : providerRouteUnavailable ? freeRouterNoCompatibleEndpoint
+              ? 'OpenRouter no tiene endpoints gratuitos compatibles con esta solicitud; se reintentará con espera creciente'
+              : `OpenRouter HTTP ${status}: proveedor no disponible`
               : 'Fallo de red al llamar al proveedor';
-      const cooldownAt = providerRateLimit || providerServerFailure || providerNetworkFailure
+      const cooldownAt = providerRateLimit || providerRouteUnavailable || providerNetworkFailure
         ? retryAt || new Date(Date.now() + baseDelaySeconds * 1000).toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, '')
         : null;
       setVisualProviderControl({
@@ -353,12 +434,16 @@ async function analyzeVideo(row, apiKey) {
       videoId: row.id, path: row.relative_path, error: message
     });
     console.error(`Visual analysis failed for video ${row.id}: ${error.message}`);
-    if (authenticationFailure || providerConfigurationFailure || providerRateLimit || providerServerFailure || providerNetworkFailure) throw error;
+    if (authenticationFailure || providerConfigurationFailure || providerRateLimit || providerRouteUnavailable || providerNetworkFailure) throw error;
   }
   return true;
 }
 
 async function runLocked() {
+  if (getAutomationControl().paused) {
+    setWorkerActivity('visual-analyzer', { phase: 'pausado', result: 'La automatización está pausada; no se inició un análisis visual' });
+    return;
+  }
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) throw new Error('OPENROUTER_API_KEY is required for visual analysis');
   // The exclusive lock proves no visual worker still owns these rows.
@@ -372,6 +457,16 @@ async function runLocked() {
     if (providerControl.configuration_fingerprint !== configFingerprint) {
       clearVisualProviderControl();
       setWorkerActivity('visual-analyzer', { phase: 'proveedor reactivado', result: 'Cambió clave, modelo o endpoint; se retoma la cola' });
+    } else if (MODEL === 'openrouter/free' &&
+        ['permanent', 'provider_unavailable'].includes(providerControl.error_class) &&
+        /^OpenRouter HTTP 404/.test(providerControl.reason || '') &&
+        (!providerControl.paused_until || new Date(`${providerControl.paused_until.replace(' ', 'T')}Z`).getTime() <= Date.now())) {
+      db.prepare(`UPDATE videos SET visual_status = 'pending', visual_attempts = MAX(visual_attempts - 1, 0),
+          visual_error = NULL, visual_error_class = NULL, visual_next_attempt_at = NULL
+        WHERE visual_status = 'failed' AND visual_error_class IN ('permanent', 'provider_unavailable')
+          AND visual_error LIKE 'OpenRouter HTTP 404:%No endpoints found that can handle the requested parameters%'`).run();
+      clearVisualProviderControl();
+      setWorkerActivity('visual-analyzer', { phase: 'reintentando router gratuito', result: 'Se reencolaron las fichas afectadas por el 404 y habrá espera automática si no hay rutas disponibles' });
     } else {
       const pauseUntil = providerControl.paused_until
         ? new Date(`${providerControl.paused_until.replace(' ', 'T')}Z`) : null;
@@ -387,7 +482,25 @@ async function runLocked() {
       clearVisualProviderControl();
     }
   }
+  if (MODEL === 'openrouter/free' && !getVisualProviderControl()) {
+    db.prepare(`UPDATE videos SET visual_status = 'pending', visual_attempts = MAX(visual_attempts - 1, 0),
+        visual_error = NULL, visual_error_class = NULL, visual_next_attempt_at = NULL
+      WHERE visual_status = 'failed' AND visual_error_class IN ('permanent', 'provider_unavailable')
+        AND visual_error LIKE 'OpenRouter HTTP 404:%No endpoints found that can handle the requested parameters%'`).run();
+  }
   const utcDay = new Date().toISOString().slice(0, 10);
+  const monthlySpend = getVisualMonthlySpend();
+  const requestReserve = visualRequestReserveUsd();
+  if (MAX_VISUAL_COST_PER_MONTH_USD > 0 &&
+      (monthlySpend >= MAX_VISUAL_COST_PER_MONTH_USD ||
+       monthlySpend + requestReserve > MAX_VISUAL_COST_PER_MONTH_USD)) {
+    setWorkerActivity('visual-analyzer', {
+      phase: 'presupuesto mensual agotado',
+      result: `Costo reportado por el proveedor: USD ${monthlySpend.toFixed(4)} / ${MAX_VISUAL_COST_PER_MONTH_USD.toFixed(4)} este mes`
+    });
+    console.log(`Visual monthly cost budget exhausted: ${monthlySpend}/${MAX_VISUAL_COST_PER_MONTH_USD} USD`);
+    return;
+  }
   const usedToday = db.prepare('SELECT request_count FROM visual_daily_requests WHERE utc_day = ?').get(utcDay)?.request_count || 0;
   const dailyRemaining = MAX_VISUAL_REQUESTS_PER_DAY
     ? Math.max(0, MAX_VISUAL_REQUESTS_PER_DAY - usedToday)
@@ -404,19 +517,42 @@ async function runLocked() {
         WHERE status = 'done' AND (visual_status IS NULL OR visual_status = 'pending'
           OR (visual_status = 'failed' AND ? = 1 AND visual_next_attempt_at IS NOT NULL
             AND visual_next_attempt_at <= CURRENT_TIMESTAMP AND visual_attempts < ?))
-        ORDER BY CASE WHEN visual_status = 'pending' OR visual_status IS NULL THEN 0 ELSE 1 END, id LIMIT ?`)
+        ORDER BY CASE WHEN visual_status = 'failed' THEN 0 ELSE 1 END,
+          COALESCE(visual_next_attempt_at, '9999-12-31 23:59:59'), id LIMIT ?`)
       .all(RETRY_FAILED ? 1 : 0, MAX_VISUAL_ATTEMPTS, batchLimit);
+  let attempted = 0;
   for (const row of candidates) {
+    if (getAutomationControl().paused) {
+      setWorkerActivity('visual-analyzer', { phase: 'pausado', result: 'El lote actual terminó antes de tomar el siguiente video' });
+      break;
+    }
+    const currentSpend = getVisualMonthlySpend();
+    const currentReserve = visualRequestReserveUsd();
+    if (MAX_VISUAL_COST_PER_MONTH_USD > 0 &&
+        (currentSpend >= MAX_VISUAL_COST_PER_MONTH_USD ||
+         currentSpend + currentReserve > MAX_VISUAL_COST_PER_MONTH_USD)) {
+      setWorkerActivity('visual-analyzer', {
+        phase: 'presupuesto mensual agotado',
+        result: `Costo reportado por el proveedor: USD ${currentSpend.toFixed(4)} / ${MAX_VISUAL_COST_PER_MONTH_USD.toFixed(4)} este mes`
+      });
+      break;
+    }
+    attempted++;
     if (!await analyzeVideo(row, apiKey)) break;
   }
-  console.log(`Visual batch: ${candidates.length} video(s) attempted`);
+  console.log(`Visual batch: ${attempted} video(s) attempted`);
 }
 
 function run() {
   return withJobLock('visual-analyzer', () => {
     setWorkerConfiguration('visual', {
       model: MODEL, max_visual: MAX_VISUAL, max_visual_attempts: MAX_VISUAL_ATTEMPTS,
+      max_visual_frames: MAX_VISUAL_FRAMES,
+      visual_request_timeout_ms: CONFIG.visual_request_timeout_ms,
       max_visual_requests_per_day: MAX_VISUAL_REQUESTS_PER_DAY,
+      max_visual_cost_per_month_usd: MAX_VISUAL_COST_PER_MONTH_USD,
+      max_visual_cost_reserve_per_request_usd: MAX_VISUAL_COST_RESERVE_PER_REQUEST_USD,
+      effective_visual_cost_reserve_per_request_usd: visualRequestReserveUsd(),
       retry_failed: RETRY_FAILED,
       video_id: Number.isInteger(TARGET_ID) ? TARGET_ID : null
     });

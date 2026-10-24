@@ -1,0 +1,11 @@
+[Unit]
+Description=Schedule bounded pCloud metadata pipeline runs
+
+[Timer]
+OnBootSec=15min
+OnUnitInactiveSec=6h
+Persistent=true
+Unit=pcloud-video-pipeline.service
+
+[Install]
+WantedBy=timers.target

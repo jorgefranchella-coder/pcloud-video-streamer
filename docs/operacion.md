@@ -20,7 +20,27 @@ Fotografía de la API y systemd tomada durante esta revisión; no representa un 
 | Temporizador técnico | Habilitado; intervalo de 6 horas tras inactividad |
 | Temporizador visual | No existe en el proyecto ni apareció entre los temporizadores consultados |
 
-El recorrido exitoso se ejecutó directamente como `jorge`, con las mismas rutas del servicio. Por eso el resultado correcto en SQLite no limpió el fallo histórico de systemd. No se determinó la causa del SIGSEGV anterior; no corresponde atribuirlo a créditos del proveedor ni a ffprobe sin evidencia adicional.
+El recorrido exitoso se ejecutó directamente como `jorge`, con las mismas rutas del servicio. Por eso el resultado correcto en SQLite no limpió el fallo histórico de systemd. El informe de Apport de las 06:31 identifica `/usr/bin/node` 18.19.1 ejecutando `indexer.js`; GDB sitúa el crash durante `node::Environment::TryLoadAddon`, mientras `better-sqlite3` 13.0.3 requiere Node 22 o superior. Los registros también muestran un SIGSEGV simultáneo en la unidad visual, pero no hay un informe separado que permita atribuirle la misma traza con certeza. Los servicios actuales apuntan a Hermes Node 22.23.1 y los lotes posteriores terminaron correctamente.
+
+## Estado observado el 22 de octubre de 2026
+
+Consulta en el host y SQLite local a las 12:58 del 22/10: 3.772 videos inventariados; 208 fichas técnicas listas, 3.562 pendientes y 2 fallidas. Hay 26 fichas visuales listas y una fallida. El lote de las 11:20 completó los videos 19–23; el de las 12:23 reintentó el video 14, pero OpenRouter agotó entonces el timeout de 120 segundos. Los videos 24–27 sí se completaron con costo reportado de USD 0. El streamer está activo desde las 12:31; el timer facial sigue activo y su siguiente ejecución está prevista para las 13:03. El timer visual está activo y su siguiente ejecución está prevista para las 13:28 locales.
+
+El timer facial también está activo. Los 208 videos técnicamente listos ya tienen índice facial vigente. El streamer se reinició a las 12:31 del 22/10/2026 y cargó el cambio que incluye en la bandeja y las sugerencias las observaciones vigentes de videos con fallo técnico, siempre que coincida el fingerprint. La lectura de las 12:58 registró 607 observaciones: 87 confirmadas y 520 pendientes de asignar. Los lotes faciales de las 12:33 y 13:03 no encontraron videos técnicos nuevos para indexar; el próximo está previsto para las 13:33. De las 208 fichas técnicas listas, 28 incluyen coordenadas GPS interpretables y ninguna registra fabricante/modelo de captura en el campo normalizado. Estos conteos son una fotografía de ese momento, no un estado permanente.
+
+El 404 fue transitorio en la práctica: el router gratuito volvió a aceptar las solicitudes sin cambiar modelo ni clave. La recuperación reencoló el video 14 como se esperaba; la solicitud siguiente agotó el límite anterior de 120 segundos. El límite ahora es configurable como `VISUAL_REQUEST_TIMEOUT_MS` y su valor predeterminado es 300 segundos; las próximas ejecuciones del servicio cargarán ese cambio. El streamer ya se reinició y cargó la bandeja facial actualizada. El video 14 tiene reintento vencido y espera el próximo lote visual.
+
+Actualización de las 16:33 locales: el video 14 terminó con `visual_status=done`, segundo intento, modelo `openrouter/free`. El inventario técnico de las 14:38 recorrió 3.772 archivos, procesó 50 y no falló ninguno; los conteos siguen en 208 listas, 3.562 pendientes y 2 fallidas. Hay 27 fichas visuales completas y 182 videos técnicos listos en cola. El lote visual de las 16:29 llegó al límite diario de 30 solicitudes UTC; las siguientes ejecuciones no podrán iniciar nuevas llamadas hasta el reinicio del contador a las 00:00 UTC (21:00 local). El timer visual sigue activo, con próximo disparo a las 17:29.
+
+El streamer todavía ejecuta el proceso iniciado a las 12:31. La actualización de la bandeja para ignorar detecciones requiere reiniciarlo; el intento desde esta sesión no pudo obtener autorización de `sudo` y no se ejecutó. El lote facial automático sigue activo y sin videos técnicos pendientes de indexar. La base registra ahora 607 observaciones vigentes: 99 confirmadas, 498 sin asignar y 10 ignoradas.
+
+## Verificación del 24 de octubre de 2026, 06:24 local
+
+La integridad SQLite pasó y no se encontraron violaciones de claves foráneas. pCloud está montado, el streamer responde y exige sesión como está configurado. Las unidades systemd pasan la validación estática, pero `NeedDaemonReload=yes`: los archivos instalados cambiaron y el administrador aún debe recargar systemd. El streamer sigue corriendo desde el 22/10, por lo que todavía no cargó el código reciente de la bandeja facial.
+
+Hay 350 fichas técnicas listas, 3.420 pendientes y 2 fallidas; el lote de las 03:15 locales procesó 50 sin errores. La indexación facial tiene 351 videos vigentes y el timer continúa procesando lotes de 10. Hay 833 observaciones faciales vigentes: 99 confirmadas, 716 sin asignar y 18 ignoradas; ocho de estas últimas todavía conservan embedding porque el streamer antiguo atendió solicitudes de rechazo después de aplicar la migración 12. La migración 13 vuelve a borrarlos al próximo arranque del código actualizado.
+
+El último lote visual completó 66 fichas en total, pero falló en el video 67 cuando OpenRouter respondió 404 por falta de endpoints gratuitos compatibles con imágenes. El proveedor quedó en pausa temporal hasta las 09:53 UTC (06:53 local), justo cuando está previsto el siguiente timer visual; el video está reencolado y conserva cero intentos. Hay 284 videos técnicamente listos pendientes de análisis visual. El timer técnico, visual y facial están habilitados.
 
 ## Consulta de estado
 
@@ -88,16 +108,17 @@ Esta ejecución no cambia el estado de la unidad systemd. El analizador visual t
 | Síntoma | Comprobación y acción |
 |---|---|
 | Solo una ficha visual por ejecución | Ver tamaño efectivo del lote y selector `VISUAL_VIDEO_ID`; leer el contador `Visual batch` del registro. No asumir una causa sin revisar configuración |
-| Muchas fichas visuales pendientes | Solo son elegibles las técnicas `done`. El timer visual es opcional y no queda habilitado por defecto; ver Configuración |
+| Muchas fichas visuales pendientes | Solo son elegibles las técnicas `done`. El timer visual y el pipeline técnico+visual son optativos y quedan deshabilitados por defecto; ver Configuración |
 | `401` / `403` del proveedor | El trabajador pausa la etapa y no vuelve a llamar con la misma configuración. Revisar credencial/permisos; cambiar clave, modelo o endpoint y reiniciar el trabajador para reactivar |
 | `429` | El lote se detiene y la ficha recibe una espera exponencial (inicia en cinco minutos, máximo 24 horas). Consultar la cuota; el siguiente arranque solo la toma cuando vence el plazo y `RETRY_VISUAL_FAILED=1` |
 | Pausa de proveedor visible | `/api/index/status` incluye `visual_provider_control`; los fallos de cuota o red esperan hasta el horario indicado, y los errores de configuración requieren cambiar clave/modelo/endpoint |
+| Pausar nuevos lotes | Con `METADATA_EDIT_TOKEN` configurado, usar el control de pausa de la sección de progreso. El trabajo técnico en curso y la solicitud visual actual terminan; no se inician etapas nuevas ni otro video visual hasta reanudar |
 | Presupuesto diario visual agotado | Revisar `visual_daily_budget` en `/api/index/status`; las fichas restantes siguen pendientes. El contador usa UTC y se renueva a las 00:00 UTC; iniciar otro lote después de ese momento |
 | JSON inválido o esquema incompatible | Revisar `visual_error`; el proveedor debe aceptar imágenes y salida estructurada. Reintentar de forma acotada o revisar el modelo |
 | `ffprobe` o `ffmpeg` lento | Ver montaje, caché y archivo actual. Un timeout de proceso no garantiza respuesta inmediata de una lectura FUSE bloqueada |
 | Contador recorrido en cero | Se persiste cada 100 archivos; contrastar crecimiento de fichas y proceso activo |
 | `running` tras un cierre abrupto | La interfaz marca `stale` cuando el PID del mismo host ya no existe. El indexador reconcilia recorridos abandonados al iniciar; el analizador visual programa el video interrumpido para reintento diferido. No borrar el bloqueo mientras su proceso siga vivo |
-| SIGSEGV / `core-dump` | Consultar journal y, si está instalado, `coredumpctl info`; revisar runtime Node y módulo nativo. La causa observada sigue sin determinar |
+| SIGSEGV / `core-dump` | El fallo histórico del 21/10 ocurrió al usar Node del sistema 18.19.1 con `better-sqlite3` 13, que requiere Node 22+. Las unidades vigentes usan `/home/jorge/.hermes/node/bin/node`; si vuelve a ocurrir, conservar el informe Apport y revisar qué ejecutable figura en `ExecStart` antes de reiniciar |
 | Servicio técnico sigue `failed` tras un lote manual exitoso | Son estados diferentes. `sudo systemctl reset-failed pcloud-video-indexer.service` limpia el registro de systemd; no repara ni procesa archivos |
 | Video visible pero no reproducible | Comprobar códec del navegador y lectura remota. No existe transcodificación |
 | No aparece el selector de nombres | Configurar `METADATA_EDIT_TOKEN` en el entorno del servidor y reiniciarlo |

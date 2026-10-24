@@ -7,6 +7,7 @@ const crypto = require('crypto');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
 const metadata = require('./metadata-store');
+const { faceConfiguration } = require('./config');
 
 const app = express();
 app.disable('x-powered-by');
@@ -23,7 +24,11 @@ const ACCESS_TOKEN = process.env.ACCESS_TOKEN || '';
 const ACCESS_COOKIE_SECURE = process.env.ACCESS_COOKIE_SECURE === undefined ? '0' : process.env.ACCESS_COOKIE_SECURE;
 const ACCESS_COOKIE_SAMESITE = process.env.ACCESS_COOKIE_SAMESITE === undefined ? 'Strict' : process.env.ACCESS_COOKIE_SAMESITE;
 const ACCESS_COOKIE = 'pcloud_video_session';
-const ACCESS_COOKIE_MAX_AGE = 12 * 60 * 60;
+const ACCESS_COOKIE_MAX_AGE = process.env.ACCESS_COOKIE_MAX_AGE_SECONDS === undefined
+  ? 30 * 24 * 60 * 60 : Number(process.env.ACCESS_COOKIE_MAX_AGE_SECONDS);
+if (!Number.isSafeInteger(ACCESS_COOKIE_MAX_AGE) || ACCESS_COOKIE_MAX_AGE < 60 * 60 || ACCESS_COOKIE_MAX_AGE > 365 * 24 * 60 * 60) {
+  throw new Error('ACCESS_COOKIE_MAX_AGE_SECONDS must be an integer between 3600 and 31536000');
+}
 if (!['0', '1'].includes(ACCESS_COOKIE_SECURE)) {
   throw new Error('ACCESS_COOKIE_SECURE must be 0 or 1');
 }
@@ -198,17 +203,175 @@ async function getVisualTimerStatus() {
   return value;
 }
 
+let faceTimerStatusCache = { checkedAt: 0, value: null };
+async function getFaceTimerStatus() {
+  if (faceTimerStatusCache.value && Date.now() - faceTimerStatusCache.checkedAt < 10000) {
+    return faceTimerStatusCache.value;
+  }
+  let value;
+  try {
+    const { stdout } = await execFileAsync('systemctl', [
+      'show', 'pcloud-video-face-indexer.timer',
+      '--property=LoadState,ActiveState,UnitFileState,NextElapseUSecRealtime,LastTriggerUSec', '--no-pager'
+    ], { timeout: 2000, maxBuffer: 10000 });
+    const fields = Object.fromEntries(stdout.trim().split('\n').map(line => {
+      const separator = line.indexOf('=');
+      return separator < 0 ? [line, ''] : [line.slice(0, separator), line.slice(separator + 1)];
+    }));
+    value = {
+      available: fields.LoadState === 'loaded', load_state: fields.LoadState || 'unknown',
+      active: fields.ActiveState === 'active', enabled: fields.UnitFileState === 'enabled',
+      next_run: fields.NextElapseUSecRealtime || null, last_run: fields.LastTriggerUSec || null
+    };
+  } catch {
+    value = { available: false, load_state: 'unknown', active: false, enabled: false, next_run: null, last_run: null };
+  }
+  faceTimerStatusCache = { checkedAt: Date.now(), value };
+  return value;
+}
+
+async function getPipelineTimerStatus() {
+  try {
+    const { stdout } = await execFileAsync('systemctl', [
+      'show', 'pcloud-video-pipeline.timer',
+      '--property=LoadState,ActiveState,UnitFileState,NextElapseUSecRealtime,LastTriggerUSec',
+      '--no-pager'
+    ], { timeout: 2000, maxBuffer: 10000 });
+    const fields = Object.fromEntries(stdout.trim().split('\n').map(line => {
+      const separator = line.indexOf('=');
+      return separator < 0 ? [line, ''] : [line.slice(0, separator), line.slice(separator + 1)];
+    }));
+    return {
+      available: fields.LoadState === 'loaded', load_state: fields.LoadState || 'unknown',
+      active: fields.ActiveState === 'active', enabled: fields.UnitFileState === 'enabled',
+      next_run: fields.NextElapseUSecRealtime || null, last_run: fields.LastTriggerUSec || null
+    };
+  } catch {
+    return { available: false, load_state: 'unknown', active: false, enabled: false, next_run: null, last_run: null };
+  }
+}
+
 function asyncRoute(handler) {
   return (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 }
 
 app.get('/api/index/status', asyncRoute(async (_req, res) => {
-  res.json({ ...metadata.status(), visual_timer: await getVisualTimerStatus() });
+  const [visualTimer, pipelineTimer, faceTimer] = await Promise.all([
+    getVisualTimerStatus(), getPipelineTimerStatus(), getFaceTimerStatus()
+  ]);
+  res.json({ ...metadata.status(), visual_timer: visualTimer, pipeline_timer: pipelineTimer,
+    face_timer: faceTimer,
+    can_control_automation: Boolean(process.env.METADATA_EDIT_TOKEN) });
 }));
+
+app.post('/api/index/control', (req, res) => {
+  if (!authorizeMetadataEdit(req, res)) return;
+  if (typeof req.body?.paused !== 'boolean') return res.status(400).json({ error: 'paused must be a boolean' });
+  res.json({ automation_control: metadata.setAutomationPaused(req.body.paused) });
+});
 
 app.get('/api/people', (_req, res) => {
   res.json({ items: metadata.listPeople(), merges: metadata.listPersonMerges(),
     can_edit_people: Boolean(process.env.METADATA_EDIT_TOKEN) });
+});
+
+app.get('/api/faces/inbox', (req, res) => {
+  const afterId = req.query.after === undefined ? 0 : Number(req.query.after);
+  const limit = req.query.limit === undefined ? 36 : Number(req.query.limit);
+  if (!Number.isSafeInteger(afterId) || afterId < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 60) {
+    return res.status(400).json({ error: 'Invalid face inbox page' });
+  }
+  const modelVersion = faceConfiguration().index_version;
+  res.json({ ...metadata.listFaceInbox({ afterId, limit, modelVersion }),
+    progress: metadata.faceProgress(modelVersion, faceConfiguration().model_version), can_edit_people: Boolean(process.env.METADATA_EDIT_TOKEN) });
+});
+
+app.get('/api/faces/:id/neighbors', (req, res) => {
+  const faceId = /^\d+$/.test(req.params.id) ? Number(req.params.id) : NaN;
+  const limit = req.query.limit === undefined ? 24 : Number(req.query.limit);
+  if (!Number.isSafeInteger(faceId) || faceId < 1 || !Number.isSafeInteger(limit) || limit < 1 || limit > 60) {
+    return res.status(400).json({ error: 'Invalid face or result limit' });
+  }
+  const result = metadata.findFaceNeighbors(faceId, faceConfiguration().index_version, limit);
+  if (!result) return res.status(404).json({ error: 'Face observation is no longer available' });
+  res.json(result);
+});
+
+app.get('/api/faces/:id/preview', asyncRoute(async (req, res) => {
+  const faceId = /^\d+$/.test(req.params.id) ? Number(req.params.id) : NaN;
+  if (!Number.isSafeInteger(faceId) || faceId < 1) return res.status(400).json({ error: 'Invalid face ID' });
+  const face = metadata.getFaceObservation(faceId, faceConfiguration().index_version);
+  if (!face || face.fingerprint !== face.current_fingerprint || !['done', 'failed'].includes(face.video_status)) {
+    return res.status(404).json({ error: 'Face preview is no longer available' });
+  }
+  const safePath = safeResolve(face.relative_path);
+  if (!safePath) return res.status(404).json({ error: 'Video not found' });
+  try {
+    const realPath = await fs.promises.realpath(safePath);
+    const realRoot = await fs.promises.realpath(ROOT_RESOLVED);
+    const relative = path.relative(realRoot, realPath);
+    if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+      return res.status(404).json({ error: 'Video not found' });
+    }
+    const stat = await fs.promises.stat(realPath);
+    if (`${stat.size}:${Math.round(stat.mtimeMs)}` !== face.fingerprint) {
+      return res.status(404).json({ error: 'Video changed since face indexing' });
+    }
+    const x = Math.max(0, Math.min(face.x, face.frame_width - 1));
+    const y = Math.max(0, Math.min(face.y, face.frame_height - 1));
+    const width = Math.max(1, Math.min(face.width, face.frame_width - x));
+    const height = Math.max(1, Math.min(face.height, face.frame_height - y));
+    const filter = `scale=${face.frame_width}:${face.frame_height},crop=${width}:${height}:${x}:${y},scale=320:320:force_original_aspect_ratio=decrease`;
+    const { stdout } = await execFileAsync('ffmpeg', [
+      '-nostdin', '-hide_banner', '-loglevel', 'error', '-ss', String(face.at_seconds),
+      '-i', realPath, '-frames:v', '1', '-vf', filter, '-q:v', '4',
+      '-f', 'image2pipe', '-vcodec', 'mjpeg', '-'
+    ], { timeout: 20000, maxBuffer: 1024 * 1024, encoding: 'buffer' });
+    if (!stdout.length || stdout.length > 1024 * 1024) return res.status(404).json({ error: 'Face preview unavailable' });
+    res.setHeader('Content-Type', 'image/jpeg');
+    res.setHeader('Content-Length', stdout.length);
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.end(stdout);
+  } catch (error) {
+    if (error.code === 'ENOENT' || error.code === 'ETIMEDOUT') return res.status(404).json({ error: 'Face preview unavailable' });
+    console.error('Face preview error:', error.message);
+    res.status(500).json({ error: 'Face preview failed' });
+  }
+}));
+
+app.post('/api/faces/assign', (req, res) => {
+  if (!authorizeMetadataEdit(req, res)) return;
+  const faceIds = req.body?.face_ids;
+  const personId = req.body?.person_id;
+  const personName = req.body?.person_name;
+  if (!Array.isArray(faceIds) || !faceIds.length || faceIds.length > 100 ||
+      faceIds.some(id => !Number.isSafeInteger(id) || id < 1) ||
+      (personId != null && (!Number.isSafeInteger(personId) || personId < 1)) ||
+      (personName != null && (typeof personName !== 'string' || personName.trim().length < 1 || personName.trim().length > 80)) ||
+      (personId != null && personName != null)) {
+    return res.status(400).json({ error: 'Invalid face IDs or identity' });
+  }
+  try {
+    const result = metadata.assignFaceObservations({
+      faceIds: [...new Set(faceIds)], personId, personName,
+      modelVersion: faceConfiguration().index_version
+    });
+    res.json({ ...result, items: metadata.listPeople() });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post('/api/faces/reject', (req, res) => {
+  if (!authorizeMetadataEdit(req, res)) return;
+  const faceIds = req.body?.face_ids;
+  if (!Array.isArray(faceIds) || !faceIds.length || faceIds.length > 100 ||
+      faceIds.some(id => !Number.isSafeInteger(id) || id < 1)) {
+    return res.status(400).json({ error: 'Invalid face IDs' });
+  }
+  const rejected = metadata.rejectFaceObservations([...new Set(faceIds)], faceConfiguration().index_version);
+  res.json({ rejected });
 });
 
 app.patch('/api/people/:id/merge', (req, res) => {
@@ -257,8 +420,11 @@ app.patch('/api/people/:id', (req, res) => {
   }
 });
 
-app.get('/api/search', (req, res) => {
+app.get('/api/search', async (req, res) => {
   const query = String(req.query.q || '').trim().slice(0, 100);
+  if (req.query.mode !== undefined && req.query.mode !== 'text') {
+    return res.status(400).json({ error: 'mode must be text' });
+  }
   const isDate = value => {
     if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
     const parsed = new Date(`${value}T00:00:00Z`);
@@ -306,14 +472,193 @@ app.get('/api/metadata', (req, res) => {
   }
   const row = metadata.getByPath.get(relativePath);
   if (!row) return res.status(404).json({ error: 'Video not indexed' });
+  const identifiedPeople = metadata.identifiedPeopleForVideo(row.id);
+  const identifiedFaces = metadata.identifiedFacesForVideo(row.id, faceConfiguration().index_version);
   res.json({
     ...metadata.parseVideo(row),
-    identified_people: metadata.identifiedPeopleForVideo(row.id),
+    identified_people: identifiedPeople.legacy,
+    identified_people_all: identifiedPeople.all,
+    identified_faces: identifiedFaces,
     stale_identifications: metadata.staleIdentificationsForVideo(row.id),
     identity_history: metadata.identityHistoryForVideo(row.id),
     can_edit_people: Boolean(process.env.METADATA_EDIT_TOKEN)
   });
 });
+
+app.post('/api/metadata/export', asyncRoute(async (req, res) => {
+  if (!authorizeMetadataEdit(req, res)) return;
+  const relativePath = req.body?.path;
+  const videoPath = safeResolve(relativePath);
+  if (typeof relativePath !== 'string' || !videoPath) {
+    return res.status(400).json({ error: 'Invalid video path' });
+  }
+  const row = metadata.getByPath.get(relativePath);
+  if (!row) return res.status(404).json({ error: 'Video not indexed' });
+  if (row.status !== 'done' || row.visual_status !== 'done' || row.visual_fingerprint !== row.fingerprint) {
+    return res.status(409).json({ error: 'A current technical and visual sheet is required before export' });
+  }
+
+  let stat;
+  try { stat = await fs.promises.stat(videoPath); }
+  catch { return res.status(404).json({ error: 'Video file not found' }); }
+  const currentFingerprint = `${stat.size}:${Math.round(stat.mtimeMs)}`;
+  if (currentFingerprint !== row.fingerprint) {
+    return res.status(409).json({ error: 'Video changed since its metadata was indexed' });
+  }
+
+  const parsed = metadata.parseVideo(row);
+  const identifiedPeople = metadata.identifiedPeopleForVideo(row.id);
+  const narrativeAssignments = Object.entries(identifiedPeople.all).map(([index, identities]) => {
+    const observationIndex = Number(index);
+    return {
+      observation_index: observationIndex,
+      observation: parsed.visual_people[observationIndex] || null,
+      identities
+    };
+  });
+  const faceAssignments = metadata.identifiedFacesForVideo(row.id, faceConfiguration().index_version);
+  const exportData = {
+    schema: 'pcloud-video-metadata/v1',
+    exported_at: new Date().toISOString(),
+    video: {
+      relative_path: row.relative_path,
+      fingerprint_algorithm: 'size-mtime-ms-rounded-v1',
+      fingerprint: row.fingerprint,
+      size_bytes: row.size_bytes,
+      modified_at: new Date(row.mtime_ms).toISOString()
+    },
+    technical: {
+      analyzed_at: row.analyzed_at,
+      duration_ms: row.duration_ms,
+      width: row.width,
+      height: row.height,
+      codec: row.codec,
+      recorded_at: row.recorded_at,
+      date_precision: row.date_precision,
+      date_source: row.date_source,
+      date_candidates: parsed.date_candidates,
+      location: parsed.technical.location || null,
+      capture_device: parsed.technical.capture_device || null
+    },
+    visual: {
+      revision: row.visual_revision,
+      analyzed_at: row.visual_analyzed_at,
+      model: row.visual_model,
+      prompt_version: row.visual_prompt_version,
+      title: row.visual_title,
+      summary: row.visual_summary,
+      uncertainty: row.visual_uncertainty,
+      people_observed: parsed.visual_people,
+      people_confirmed: narrativeAssignments.map(assignment => ({
+        ...assignment,
+        identities: assignment.identities.map(person => ({ name: person.name }))
+      })),
+      events: parsed.visual_events,
+      places: parsed.visual_places,
+      keywords: parsed.visual_keywords,
+      date_clues: parsed.visual_date_clues,
+      confirmed_names: parsed.confirmed_people
+    },
+    face_model_version: faceConfiguration().index_version,
+    face_identity_summary: faceAssignments.map(person => ({
+      name: person.name, appearances: person.appearances, first_at_seconds: person.first_at_seconds
+    }))
+  };
+
+  const sidecarPath = `${videoPath}.metadata.json`;
+  let fileHandle;
+  try {
+    fileHandle = await fs.promises.open(sidecarPath, 'wx', 0o600);
+  } catch (error) {
+    if (error.code === 'EEXIST') {
+      return res.status(409).json({ error: 'A sidecar already exists; it was not overwritten' });
+    }
+    throw error;
+  }
+  try {
+    await fileHandle.writeFile(`${JSON.stringify(exportData, null, 2)}\n`, 'utf8');
+  } catch (error) {
+    await fileHandle.close().catch(() => {});
+    await fs.promises.unlink(sidecarPath).catch(() => {});
+    throw error;
+  }
+  await fileHandle.close();
+  res.status(201).json({
+    exported: true,
+    sidecar_path: path.relative(ROOT_RESOLVED, sidecarPath).split(path.sep).join('/'),
+    fingerprint: row.fingerprint
+  });
+}));
+
+app.post('/api/metadata/import', asyncRoute(async (req, res) => {
+  if (!authorizeMetadataEdit(req, res)) return;
+  const relativePath = req.body?.path;
+  const videoPath = safeResolve(relativePath);
+  if (typeof relativePath !== 'string' || !videoPath) {
+    return res.status(400).json({ error: 'Invalid video path' });
+  }
+  const row = metadata.getByPath.get(relativePath);
+  if (!row) return res.status(404).json({ error: 'Video not indexed' });
+  let videoStat;
+  try { videoStat = await fs.promises.stat(videoPath); }
+  catch { return res.status(404).json({ error: 'Video file not found' }); }
+  const currentFingerprint = `${videoStat.size}:${Math.round(videoStat.mtimeMs)}`;
+  if (currentFingerprint !== row.fingerprint) {
+    return res.status(409).json({ error: 'Video changed since its metadata was indexed' });
+  }
+
+  const sidecarPath = `${videoPath}.metadata.json`;
+  let sidecarHandle;
+  try {
+    sidecarHandle = await fs.promises.open(sidecarPath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  } catch (error) {
+    if (error.code === 'ENOENT') return res.status(404).json({ error: 'Sidecar not found' });
+    if (error.code === 'ELOOP') return res.status(400).json({ error: 'Sidecar must not be a symbolic link' });
+    throw error;
+  }
+  let sidecar;
+  try {
+    const sidecarStat = await sidecarHandle.stat();
+    if (!sidecarStat.isFile() || sidecarStat.size > 2 * 1024 * 1024) {
+      return res.status(400).json({ error: 'Sidecar must be a regular file smaller than 2 MiB' });
+    }
+    const buffer = Buffer.alloc(sidecarStat.size);
+    const { bytesRead } = await sidecarHandle.read(buffer, 0, buffer.length, 0);
+    sidecar = JSON.parse(buffer.subarray(0, bytesRead).toString('utf8'));
+  } catch (error) {
+    if (error instanceof SyntaxError) return res.status(400).json({ error: 'Sidecar contains invalid JSON' });
+    throw error;
+  } finally {
+    await sidecarHandle.close();
+  }
+  if (!sidecar || sidecar.schema !== 'pcloud-video-metadata/v1' ||
+      sidecar.video?.relative_path !== relativePath ||
+      sidecar.video?.fingerprint_algorithm !== 'size-mtime-ms-rounded-v1' ||
+      typeof sidecar.video?.fingerprint !== 'string') {
+    return res.status(400).json({ error: 'Unsupported sidecar schema or video path' });
+  }
+  const visual = {
+    ...sidecar.visual,
+    technical_location: sidecar.technical?.location || null,
+    technical_capture_device: sidecar.technical?.capture_device || null
+  };
+  let result;
+  try { result = metadata.importVisualSidecar(relativePath, sidecar.video.fingerprint, visual); }
+  catch (error) { return res.status(400).json({ error: error.message }); }
+  if (result.error === 'VIDEO_NOT_FOUND') return res.status(404).json({ error: 'Video not indexed' });
+  if (result.error === 'FINGERPRINT_MISMATCH') return res.status(409).json({ error: 'Sidecar belongs to a different version of the video' });
+  if (result.error === 'TECHNICAL_METADATA_REQUIRED') return res.status(409).json({ error: 'Technical metadata must be indexed before import' });
+  if (result.error === 'VISUAL_METADATA_EXISTS') return res.status(409).json({ error: 'A visual sheet or earlier revision already exists; it was not replaced' });
+  const faceIdentityCount = Array.isArray(sidecar.face_identity_summary) ? sidecar.face_identity_summary.length : 0;
+  res.status(201).json({
+    imported: true,
+    revision: result.revision,
+    imported_assignments: result.imported_assignments,
+    location_restored: result.location_restored,
+    capture_device_restored: result.capture_device_restored,
+    face_identity_summary_not_restored: faceIdentityCount
+  });
+}));
 
 app.get('/api/metadata/evidence', asyncRoute(async (req, res) => {
   const relativePath = req.query.path;
@@ -358,6 +703,14 @@ function authorizeMetadataEdit(req, res) {
     res.status(503).json({ error: 'Editing is not configured' });
     return false;
   }
+  // With library login enabled, that persistent authenticated session is the
+  // single credential for both reading and editing. Keep the standalone edit
+  // bearer token for deployments that do not enable ACCESS_TOKEN.
+  if (ACCESS_TOKEN) {
+    if (hasValidSession(req)) return true;
+    res.status(401).json({ error: 'Authentication required' });
+    return false;
+  }
   const supplied = String(req.headers.authorization || '').replace(/^Bearer /, '');
   const expectedBytes = Buffer.from(expected);
   const suppliedBytes = Buffer.from(supplied);
@@ -371,31 +724,55 @@ function authorizeMetadataEdit(req, res) {
 app.put('/api/metadata/person', (req, res) => {
   if (!authorizeMetadataEdit(req, res)) return;
   const { path: relativePath, analysis_revision: expectedRevision,
-    observation_index: observationIndex, person_id: personId, person_name: personName } = req.body || {};
+    observation_index: observationIndex, person_id: personId, person_ids: personIds, person_name: personName } = req.body || {};
   const stale = req.body?.stale_observation;
   if (typeof relativePath !== 'string' || !safeResolve(relativePath) ||
       typeof expectedRevision !== 'string' || !expectedRevision || expectedRevision.length > 200 ||
       !Number.isInteger(observationIndex) || observationIndex < 0 ||
       (personId != null && !Number.isInteger(personId)) ||
+      (personIds != null && (!Array.isArray(personIds) || personIds.length > 30 ||
+        personIds.some(id => !Number.isSafeInteger(id) || id < 1))) ||
       (personName != null && (typeof personName !== 'string' || personName.trim().length > 80)) ||
       (stale != null && (typeof stale.analysis_revision !== 'string' || stale.analysis_revision.length > 200 ||
         !Number.isInteger(stale.observation_index) || stale.observation_index < 0))) {
     return res.status(400).json({ error: 'Invalid video, observation, or person' });
   }
   try {
-    const person = metadata.setVideoPerson({
-      relativePath, expectedRevision, observationIndex, personId, personName,
+    const assignedPeople = metadata.setVideoPerson({
+      relativePath, expectedRevision, observationIndex, personId, personIds, personName,
       staleObservation: stale ? {
         analysisRevision: stale.analysis_revision,
         observationIndex: stale.observation_index
       } : undefined
     });
-    if (person === false) return res.status(404).json({ error: 'Video or observation not found' });
-    res.json({ person, people: metadata.listPeople() });
+    if (assignedPeople === false) return res.status(404).json({ error: 'Video or observation not found' });
+    res.json({ person: assignedPeople[0] || null, assigned_people: assignedPeople, people: metadata.listPeople() });
   } catch (error) {
     if (error.code === 'STALE_VISUAL_REVISION') return res.status(409).json({ error: error.message });
     res.status(400).json({ error: error.message });
   }
+});
+
+app.post('/api/metadata/visual/retry', (req, res) => {
+  if (!authorizeMetadataEdit(req, res)) return;
+  const relativePath = req.body?.path;
+  if (typeof relativePath !== 'string' || !safeResolve(relativePath)) {
+    return res.status(400).json({ error: 'Invalid video path' });
+  }
+  const result = metadata.retryVisualAnalysis(relativePath);
+  if (!result) return res.status(409).json({ error: 'Only a failed visual analysis can be retried' });
+  res.json(result);
+});
+
+app.post('/api/metadata/technical/retry', (req, res) => {
+  if (!authorizeMetadataEdit(req, res)) return;
+  const relativePath = req.body?.path;
+  if (typeof relativePath !== 'string' || !safeResolve(relativePath)) {
+    return res.status(400).json({ error: 'Invalid video path' });
+  }
+  const result = metadata.retryTechnicalAnalysis(relativePath);
+  if (!result) return res.status(409).json({ error: 'Only a failed technical probe can be retried' });
+  res.json(result);
 });
 
 app.post('/api/metadata/person/review-stale', (req, res) => {
