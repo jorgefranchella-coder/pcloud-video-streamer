@@ -116,7 +116,7 @@ SQLite es la fuente de verdad para fichas, ubicación, cámara e identidades con
 
 Incrustar la ficha en contenedores MP4/MOV o Matroska queda como opción posterior de exportación a una copia. Los tags de ubicación sirven para coordenadas, pero no existe una convención universal y bien soportada por reproductores para nombres de personas identificadas. La aplicación nunca debe actualizar el original automáticamente.
 
-`public/app.js` administra árbol, reproducción, fichas, búsqueda, directorio de personas y consulta periódica del progreso. No hay framework ni compilación del frontend. Tailwind se descarga desde CDN y la tipografía desde Google Fonts. Con `ACCESS_TOKEN`, el navegador conserva solo una cookie de sesión `HttpOnly` de 30 días por defecto; esa sesión autoriza lectura y edición si `METADATA_EDIT_TOKEN` habilita las rutas. Sin autenticación de biblioteca, el modo local conserva el token Bearer en memoria de la página.
+`public/app.js` administra árbol, reproducción, fichas, búsqueda, directorio de personas y consulta periódica del progreso. No hay framework ni compilación del frontend. Tailwind se descarga desde CDN y la tipografía desde Google Fonts. El manifiesto y el service worker permiten instalar la interfaz como PWA; este último cachea recursos estáticos y muestra una pantalla informativa sin conexión, pero nunca cachea API, streams ni fotogramas. El acceso PWA requiere HTTPS (o localhost). Con `ACCESS_TOKEN`, el navegador conserva solo una cookie de sesión `HttpOnly` de 30 días por defecto; esa sesión autoriza lectura y edición si `METADATA_EDIT_TOKEN` habilita las rutas. Sin autenticación de biblioteca, el modo local conserva el token Bearer en memoria de la página.
 
 ## Límites de acceso y privacidad
 

@@ -3,7 +3,16 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#101417">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Archivo">
   <title>Archivo · Mis vídeos</title>
+  <link rel="icon" href="/icons/favicon.svg" type="image/svg+xml">
+  <link rel="icon" href="/icons/icon-192.png" sizes="192x192" type="image/png">
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+  <link rel="manifest" href="/manifest.webmanifest">
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -53,6 +62,7 @@
         <div class="flex items-center justify-between gap-4">
           <div class="min-w-0"><p class="main-eyebrow">TU COLECCIÓN</p><h2 id="videoTitle" class="text-lg font-medium truncate max-w-md" aria-live="polite" aria-atomic="true">Selecciona un vídeo para reproducir</h2></div>
           <div class="flex items-center gap-2">
+            <button id="installAppBtn" type="button" class="hidden rounded-lg border border-gray-600 px-3 py-2 text-xs hover:bg-gray-700" aria-label="Instalar Archivo como aplicación">Instalar app</button>
             <span id="videoInfo" class="text-sm text-gray-500 hidden"></span>
           </div>
         </div>

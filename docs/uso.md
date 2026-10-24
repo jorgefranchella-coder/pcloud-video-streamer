@@ -2,6 +2,10 @@
 
 [Volver al README](../README.md)
 
+## Instalar como aplicación
+
+En Chrome, abrí el sitio bajo HTTPS y usá «Instalar app» cuando aparezca el botón, o el menú del navegador. En iPhone/iPad, usá Compartir → «Agregar a pantalla de inicio». La app guarda sus recursos estáticos y muestra una pantalla informativa sin conexión; la biblioteca, los videos, las fichas y las ediciones necesitan conexión con el servidor.
+
 ## Ver un video y su ficha
 
 Abrir las carpetas del panel lateral y seleccionar un video. En móvil, el botón de menú abre el navegador de carpetas. La ficha aparece debajo del reproductor: duración, resolución, códec, fecha sugerida y evidencia de esa fecha. Si el archivo incluye tags de ubicación o de fabricante/modelo de cámara reconocidos por ffprobe, se muestran sus valores y origen. Si ya existe análisis visual, también aparecen título, resumen, personas observadas, momentos y lugares.

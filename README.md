@@ -1,6 +1,6 @@
 # Videos de pCloud: reproducción, fichas y búsqueda
 
-Aplicación para explorar una biblioteca familiar montada con rclone, reproducir videos y encontrar escenas mediante fichas técnicas, descripciones visuales y personas identificadas manualmente.
+Aplicación web progresiva instalable para explorar una biblioteca familiar montada con rclone, reproducir videos y encontrar escenas mediante fichas técnicas, descripciones visuales y personas identificadas. Sin conexión muestra una pantalla informativa; navegar la biblioteca y reproducir videos requiere acceso al servidor.
 
 Documentación revisada contra el código el **21 de octubre de 2026**. Las cifras de ejecución se conservan como una fotografía fechada en [Operación](docs/operacion.md); el estado actual se consulta en la interfaz o en `/api/index/status`.
 

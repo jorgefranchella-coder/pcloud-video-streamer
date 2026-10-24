@@ -1,0 +1,18 @@
+{
+  "id": "/",
+  "name": "Archivo · Mis vídeos",
+  "short_name": "Archivo",
+  "description": "Explorá y reproducí tu biblioteca personal de vídeos.",
+  "lang": "es",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#101417",
+  "theme_color": "#101417",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

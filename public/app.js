@@ -65,6 +65,7 @@ const peopleDirectory = document.getElementById('peopleDirectory');
 const closePeopleDialog = document.getElementById('closePeopleDialog');
 const faceReviewDialog = document.getElementById('faceReviewDialog');
 const closeFaceReview = document.getElementById('closeFaceReview');
+const installAppBtn = document.getElementById('installAppBtn');
 const faceInboxStatus = document.getElementById('faceInboxStatus');
 const faceInboxGrid = document.getElementById('faceInboxGrid');
 const faceLoadMore = document.getElementById('faceLoadMore');
@@ -115,12 +116,37 @@ let treeRequestId = 0;
 let accessRenewalPromise = null;
 let accessSessionRequired = false;
 const SEARCH_PAGE_SIZE = 50;
+let pendingInstallPrompt = null;
 
 // API Base URL
 const API_BASE = '';
 
+window.addEventListener('beforeinstallprompt', event => {
+  event.preventDefault();
+  pendingInstallPrompt = event;
+  installAppBtn.classList.remove('hidden');
+});
+
+window.addEventListener('appinstalled', () => {
+  pendingInstallPrompt = null;
+  installAppBtn.classList.add('hidden');
+});
+
+installAppBtn.addEventListener('click', async () => {
+  if (!pendingInstallPrompt) return;
+  pendingInstallPrompt.prompt();
+  await pendingInstallPrompt.userChoice;
+  pendingInstallPrompt = null;
+  installAppBtn.classList.add('hidden');
+});
+
 // Initialize
 document.addEventListener('DOMContentLoaded', async () => {
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/service-worker.js').catch(error => {
+      console.warn('No se pudo registrar el service worker:', error);
+    });
+  }
   if (!await establishAccessSession()) {
     if (!folderTree.textContent) {
       folderTree.textContent = 'Acceso requerido para consultar la biblioteca.';
