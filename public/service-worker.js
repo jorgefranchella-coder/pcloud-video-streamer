@@ -1,6 +1,6 @@
 'use strict';
 
-const CACHE_NAME = 'archivo-app-shell-v1';
+const CACHE_NAME = 'archivo-app-shell-v6';
 const APP_SHELL = [
   '/',
   '/index.html',

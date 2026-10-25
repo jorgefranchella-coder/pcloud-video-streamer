@@ -23,6 +23,9 @@ El proyecto no carga archivos `.env` automáticamente. Para una ejecución manua
 | `ACCESS_COOKIE_SECURE` | Desactivado | Web; `1` agrega `Secure` a la cookie, necesario detrás de HTTPS |
 | `ACCESS_COOKIE_SAMESITE` | `Strict` | Web; `Strict`, `Lax` o `None`; `None` requiere `ACCESS_COOKIE_SECURE=1` |
 | `CORS_ORIGINS` | Vacío | Web; lista separada por comas de orígenes HTTP(S) exactos autorizados para llamadas cross-origin |
+| `JELLYFIN_URL` | Sin definir | Web; URL base del servidor Jellyfin; la sincronización se oculta si falta esta variable o la clave |
+| `JELLYFIN_API_KEY` | Sin definir | Web; clave API de Jellyfin, solo se usa desde el servidor y nunca se entrega al navegador |
+| `JELLYFIN_USER_ID` | Sin definir | Web; usuario Jellyfin opcional; si falta, se detecta la primera cuenta administradora |
 | `INDEX_MODE` | Sin definir | Indexador; `inventory` evita ffprobe |
 | `PROBE_TIMEOUT_MS` | `30000` | Indexador; timeout por ffprobe |
 | `MAX_PROBES` | `50` | Indexador; intentos por recorrido; `0` sin límite |
@@ -38,7 +41,7 @@ El proyecto no carga archivos `.env` automáticamente. Para una ejecución manua
 | `FACE_MIN_FACE_SIZE` | `48` | Lado mínimo de la detección facial, entre 20 y 512 px |
 | `FACE_DETECTION_THRESHOLD` | `0.75` | Confianza mínima de detección YuNet, entre 0.1 y 1 |
 | `FACE_SUGGESTION_THRESHOLD` | `0.5` | Similitud coseno mínima para mostrar identidades sugeridas; no asigna nombres automáticamente, entre 0 y 1 |
-| `FACE_AUTO_ASSIGNMENT_THRESHOLD` | `0.8` | Similitud mínima inclusiva para asignar el rostro a la identidad con mejor coincidencia; queda registrada como automática, entre 0 y 1 y debe ser mayor que el umbral de sugerencias |
+| `FACE_AUTO_ASSIGNMENT_THRESHOLD` | `0.75` | Similitud mínima inclusiva para asignar el rostro a la identidad con mejor coincidencia; queda registrada como automática, entre 0 y 1 y debe ser mayor que el umbral de sugerencias |
 | `FACE_AUTO_ASSIGNMENT_BATCH_SIZE` | `1000` | Rostros pendientes que se comparan por ejecución del indexador automático, entre 1 y 10000 |
 | `FACE_RETRY_FAILED` | `0` | Si vale `1`, vuelve a procesar videos con error |
 | `FACE_VIDEO_ID` | Sin definir | ID opcional para procesar un video específico |
@@ -47,17 +50,23 @@ El proyecto no carga archivos `.env` automáticamente. Para una ejecución manua
 | `MAX_VISUAL_FRAMES` | `4` | Visual; máximo de fotogramas por ficha, entre 1 y 8; se ajusta por duración |
 | `VISUAL_REQUEST_TIMEOUT_MS` | `300000` | Visual; tiempo máximo de espera por respuesta del proveedor, entre 30.000 y 600.000 ms |
 | `MAX_VISUAL_ATTEMPTS` | `5` | Visual; intentos automáticos máximos por fingerprint, entre 1 y 20 |
-| `MAX_VISUAL_REQUESTS_PER_DAY` | `0` | Visual; solicitudes iniciadas por día UTC; `0` desactiva el límite |
+| `MAX_VISUAL_REQUESTS_PER_DAY` | `0` | Visual; solicitudes al proveedor iniciadas por día UTC, incluidos reintentos compactos; `0` desactiva el límite |
 | `MAX_VISUAL_COST_PER_MONTH_USD` | `0` | Visual; detiene lotes cuando el costo reportado acumulado llega al umbral; `0` desactiva el umbral |
 | `MAX_VISUAL_COST_RESERVE_PER_REQUEST_USD` | `0.05` | Visual; reserva mínima por solicitud; si hay datos, se usa el mayor entre este piso y dos veces el costo máximo observado en las últimas 30 fichas del mismo modelo durante el mes UTC |
 | `RETRY_VISUAL_FAILED` | Desactivado | Visual; exactamente `1` incluye fallos transitorios cuyo tiempo de espera ya venció |
 | `VISUAL_VIDEO_ID` | Sin definir | Visual; ID positivo selecciona un solo video técnicamente listo, incluso si ya tiene ficha |
+| `REFINEMENT_MODEL` | `openrouter/free` | Redactor; modelo de texto de OpenRouter para propuestas de título/resumen |
+| `MAX_REFINEMENTS` | `5` | Redactor; máximo de propuestas por lote, entre 1 y 100 |
+| `MAX_REFINEMENT_REQUESTS_PER_DAY` | `30` | Redactor; solicitudes iniciadas por día UTC, entre 0 y 5000; `0` desactiva el límite |
+| `REFINEMENT_VIDEO_ID` | Sin definir | Redactor; ID positivo opcional para procesar un solo video; no dejar fijado en el timer |
 
 Validación al iniciar: `PROBE_TIMEOUT_MS` debe estar entre 1.000 y 600.000; `MAX_PROBES` entre 0 y 1.000.000 (0 significa sin límite); `MAX_VISUAL` entre 1 y 100; `MAX_VISUAL_FRAMES` entre 1 y 8; `VISUAL_REQUEST_TIMEOUT_MS` entre 30.000 y 600.000; `MAX_VISUAL_ATTEMPTS` entre 1 y 20; `MAX_VISUAL_REQUESTS_PER_DAY` entre 0 y 5.000 (0 significa sin límite); `MAX_VISUAL_COST_PER_MONTH_USD` entre 0 y 100.000 y `MAX_VISUAL_COST_RESERVE_PER_REQUEST_USD` entre 0 y 1.000, ambos con hasta seis decimales; `VISUAL_VIDEO_ID`, si se define, debe ser un entero positivo; los flags `RETRY_*` aceptan solo `0` o `1`. Un valor inválido detiene ese trabajador con un error explícito. Los errores de autenticación y las respuestas 4xx se pausan hasta cambiar la configuración, salvo que `openrouter/free` no encuentre una ruta compatible: ese caso se reintenta con espera creciente. Los 429, 5xx y fallos de red también esperan antes del próximo intento.
 
 La unidad visual del repositorio declara `MAX_VISUAL=5` y `RETRY_VISUAL_FAILED=1`. El archivo de entorno de systemd puede sobrescribir esas variables. Cada trabajador registra en SQLite los límites/modelo no secretos usados al arrancar. La interfaz muestra la última configuración registrada por cada etapa; no lee ni revela las claves del proveedor. También muestra el último lote y conserva hasta 200 ejecuciones recientes de cada etapa.
 
 Los límites de cuota, precios y disponibilidad de los proveedores no están codificados como garantías del proyecto. Consultarlos en la cuenta del proveedor antes de ampliar el procesamiento. El límite mensual usa costos reportados tras respuestas exitosas; no es un tope financiero garantizado y una última solicitud puede excederlo.
+
+Si una respuesta visual no contiene JSON válido o texto estructurado, el analizador intenta primero extraer un objeto JSON rodeado por texto y luego hace un único reanálisis con una instrucción compacta y menos tokens. Ambas solicitudes cuentan para la cuota diaria y la reserva mensual. Los registros conservan modelo/proveedor, ID de solicitud, `finish_reason`, uso y tamaño de la respuesta, sin guardar el texto generado inválido. El reintento compacto también tiene el timeout `VISUAL_REQUEST_TIMEOUT_MS`.
 
 ## Desarrollo local
 
@@ -119,6 +128,37 @@ Para editar identidades, crear `/etc/pcloud-video-metadata.env` con `sudoedit`:
 ```ini
 METADATA_EDIT_TOKEN=REEMPLAZAR_POR_UN_TOKEN_ALEATORIO
 ```
+
+Para sincronizar fichas al Jellyfin local, crear una clave API desde Jellyfin (**Dashboard → API Keys**) y guardarla en `/etc/pcloud-video-jellyfin.env`:
+
+```ini
+JELLYFIN_URL=http://127.0.0.1:8096
+JELLYFIN_API_KEY=REEMPLAZAR_POR_LA_CLAVE_API
+# Opcional: si no se define, se detecta la cuenta administradora.
+# JELLYFIN_USER_ID=ID_DEL_USUARIO
+```
+
+```bash
+sudo chmod 600 /etc/pcloud-video-jellyfin.env
+```
+
+La ficha se envía solo al pedirlo desde el streamer y confirmar una vista previa. La app compara la ruta absoluta del video para encontrar el elemento en Jellyfin, actualiza título, descripción, fecha, nombres confirmados, tags de archivo y ubicación/cámara disponibles; conserva los demás miembros del elenco y etiquetas. Los tags propios llevan el prefijo `Archivo:`. No se escriben los archivos de video. Reiniciar el streamer luego de cambiar este archivo.
+
+## Redacción familiar posterior
+
+El redactor toma la ficha visual ya guardada, la fecha/ubicación técnica, los nombres confirmados y el contexto editable de cada persona. Envía **texto**, incluidos los nombres y contextos que correspondan al video, al modelo configurado en OpenRouter. La solicitud exige `provider.data_collection=deny`, para excluir proveedores que recolectan datos para almacenamiento o entrenamiento. No extrae ni envía nuevos fotogramas. Genera una propuesta sin reemplazar la ficha visual original; la web permite corregirla, aprobarla o descartarla. Solo una propuesta aprobada y vigente alimenta la búsqueda y el título/resumen enviados a Jellyfin.
+
+La unidad usa la misma `OPENROUTER_API_KEY` de `/etc/pcloud-video-visual.env`. `REFINEMENT_MODEL` puede definirse en ese archivo para elegir otro modelo de texto. El límite diario del redactor es independiente del límite visual. Instalar y activar la etapa:
+
+```bash
+sudo cp pcloud-video-refinement.service pcloud-video-refinement.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now pcloud-video-refinement.timer
+sudo systemctl start pcloud-video-refinement.service
+sudo systemctl restart pcloud-video-streamer.service
+```
+
+Consultar `journalctl -u pcloud-video-refinement.service -n 50 --no-pager`. Los errores tienen hasta tres intentos con espera; desde la ficha se puede reiniciar un caso agotado. El proceso respeta la pausa global y el bloqueo común con los otros indexadores. Los perfiles de personas se guardan localmente y los cambios vuelven obsoletas las propuestas anteriores; el próximo lote generará otra.
 
 Para restringir la biblioteca a personas con token, crear `/etc/pcloud-video-access.env`:
 

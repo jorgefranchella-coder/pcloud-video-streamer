@@ -22,7 +22,7 @@ catch { throw new Error('OPENROUTER_API_URL must be a valid HTTPS URL'); }
 if (parsedApiUrl.protocol !== 'https:' || parsedApiUrl.username || parsedApiUrl.password) {
   throw new Error('OPENROUTER_API_URL must use HTTPS and must not contain credentials');
 }
-const PROMPT_VERSION = 'visual-v2';
+const PROMPT_VERSION = 'visual-v3';
 const MAX_VISUAL = CONFIG.max_visual;
 const MAX_VISUAL_FRAMES = CONFIG.max_visual_frames;
 const MAX_VISUAL_ATTEMPTS = CONFIG.max_visual_attempts;
@@ -39,28 +39,6 @@ function visualRequestReserveUsd() {
 function providerConfigurationFingerprint(apiKey) {
   return crypto.createHash('sha256').update(`${API_URL}\0${MODEL}\0${apiKey}`).digest('hex');
 }
-
-const evidenceItem = {
-  type: 'object',
-  properties: { description: { type: 'string' }, frame_index: { type: 'integer' } },
-  required: ['description', 'frame_index'],
-  additionalProperties: false
-};
-const responseSchema = {
-  type: 'object',
-  properties: {
-    title: { type: 'string' },
-    summary: { type: 'string' },
-    events: { type: 'array', items: evidenceItem },
-    people: { type: 'array', items: evidenceItem },
-    places: { type: 'array', items: { type: 'string' } },
-    keywords: { type: 'array', items: { type: 'string' } },
-    date_clues: { type: 'array', items: evidenceItem },
-    uncertainty: { type: 'string' }
-  },
-  required: ['title', 'summary', 'events', 'people', 'places', 'keywords', 'date_clues', 'uncertainty'],
-  additionalProperties: false
-};
 
 function sampleTimes(durationMs, maximum = MAX_VISUAL_FRAMES) {
   if (!durationMs || durationMs < 2000 || maximum === 1) return [0];
@@ -202,16 +180,92 @@ function summarizeProviderError(body) {
   return detail.slice(0, 900);
 }
 
-async function describeFrames(frames, apiKey) {
-  const monthlySpendBeforeRequest = getVisualMonthlySpend();
-  const requestReserve = visualRequestReserveUsd();
-  if (MAX_VISUAL_COST_PER_MONTH_USD > 0 &&
-      (monthlySpendBeforeRequest >= MAX_VISUAL_COST_PER_MONTH_USD ||
-       monthlySpendBeforeRequest + requestReserve > MAX_VISUAL_COST_PER_MONTH_USD)) {
-    const error = new Error('Visual monthly cost reserve exhausted');
-    error.code = 'VISUAL_MONTHLY_BUDGET_EXHAUSTED';
-    throw error;
+function safeRoutingDiagnostics(error) {
+  const details = [];
+  if (typeof error?.code === 'string' || typeof error?.code === 'number') {
+    details.push(`code=${String(error.code).slice(0, 100)}`);
   }
+  const metadata = error?.metadata;
+  if (metadata && typeof metadata === 'object') {
+    const provider = metadata.provider_name || metadata.provider;
+    if (typeof provider === 'string') details.push(`provider=${provider.slice(0, 100)}`);
+    const funnel = metadata.routing_funnel;
+    if (Array.isArray(funnel)) {
+      const stages = funnel.slice(0, 5).map(stage => Object.entries(stage || {})
+        .filter(([, value]) => ['string', 'number', 'boolean'].includes(typeof value))
+        .map(([key, value]) => `${key}=${String(value).slice(0, 80)}`).join(','))
+        .filter(Boolean).join(' > ');
+      if (stages) details.push(`routing_funnel=${stages.slice(0, 500)}`);
+    }
+  }
+  return details.join('; ').slice(0, 700);
+}
+
+function summarizeJsonShape(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return `root=${Array.isArray(value) ? 'array' : typeof value}`;
+  return Object.entries(value).slice(0, 30).map(([key, item]) => {
+    const type = Array.isArray(item) ? `array${item[0] && typeof item[0] === 'object' ? `{${Object.keys(item[0]).slice(0, 12).join(',')}}` : ''}` : item === null ? 'null' : typeof item;
+    return `${key}:${type}`;
+  }).join(',').slice(0, 700);
+}
+
+function parseJsonObject(textValue) {
+  const source = String(textValue || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+  try { return JSON.parse(source); } catch { /* Try a JSON object surrounded by prose. */ }
+
+  for (let start = source.indexOf('{'); start >= 0; start = source.indexOf('{', start + 1)) {
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let index = start; index < source.length; index++) {
+      const char = source[index];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (char === '\\') escaped = true;
+        else if (char === '"') inString = false;
+        continue;
+      }
+      if (char === '"') inString = true;
+      else if (char === '{') depth++;
+      else if (char === '}' && --depth === 0) {
+        try { return JSON.parse(source.slice(start, index + 1)); } catch { break; }
+      }
+    }
+  }
+  throw new SyntaxError('No valid JSON object found in model response');
+}
+
+function responseDiagnostics(data, message, requestId) {
+  const content = message?.content;
+  return {
+    provider: typeof data.provider === 'string' ? data.provider.slice(0, 100) : null,
+    model: typeof data.model === 'string' ? data.model.slice(0, 160) : MODEL,
+    request_id: requestId ? String(requestId).slice(0, 160) : null,
+    finish_reason: data.choices?.[0]?.finish_reason || null,
+    response_id: typeof data.id === 'string' ? data.id.slice(0, 160) : null,
+    content_type: Array.isArray(content) ? 'array' : typeof content,
+    content_chars: typeof content === 'string' ? content.length
+      : Array.isArray(content) ? content.reduce((sum, item) => sum + (typeof item?.text === 'string' ? item.text.length : 0), 0) : 0,
+    refusal: typeof message?.refusal === 'string' ? message.refusal.slice(0, 300) : null,
+    tool_calls: Array.isArray(message?.tool_calls) ? message.tool_calls.length : 0,
+    usage: data.usage || null
+  };
+}
+
+function combineUsage(first, second) {
+  if (!first) return second || {};
+  if (!second) return first;
+  const result = { ...first, ...second };
+  for (const key of ['prompt_tokens', 'completion_tokens', 'total_tokens', 'cost']) {
+    const a = Number(first[key]);
+    const b = Number(second[key]);
+    if (Number.isFinite(a) || Number.isFinite(b)) result[key] = (Number.isFinite(a) ? a : 0) + (Number.isFinite(b) ? b : 0);
+  }
+  return result;
+}
+
+async function describeFrames(frames, apiKey) {
+  const requestReserve = visualRequestReserveUsd();
   const content = [{ type: 'text', text: 'Estas son imágenes puntuales del mismo video, en orden temporal. Usa el índice de cada fotograma para respaldar eventos, personas y pistas de fecha.' }];
   for (const [index, frame] of frames.entries()) {
     content.push({ type: 'text', text: `Fotograma ${index + 1}, segundo ${frame.at_seconds}:` });
@@ -220,63 +274,125 @@ async function describeFrames(frames, apiKey) {
       image_url: { url: `data:image/jpeg;base64,${frame.image.toString('base64')}`, detail: 'high' }
     });
   }
-  if (!reserveVisualDailyRequest(MAX_VISUAL_REQUESTS_PER_DAY)) {
-    const error = new Error('Visual daily request budget exhausted');
-    error.code = 'VISUAL_DAILY_BUDGET_EXHAUSTED';
-    throw error;
-  }
-  let response;
+  const requestCounts = { made: 0 };
+  const request = async compact => {
+    const monthlySpendBeforeRequest = getVisualMonthlySpend();
+    if (MAX_VISUAL_COST_PER_MONTH_USD > 0 &&
+        (monthlySpendBeforeRequest >= MAX_VISUAL_COST_PER_MONTH_USD ||
+         monthlySpendBeforeRequest + requestReserve * (requestCounts.made + 1) > MAX_VISUAL_COST_PER_MONTH_USD)) {
+      const error = new Error('Visual monthly cost reserve exhausted');
+      error.code = 'VISUAL_MONTHLY_BUDGET_EXHAUSTED';
+      throw error;
+    }
+    if (!reserveVisualDailyRequest(MAX_VISUAL_REQUESTS_PER_DAY)) {
+      const error = new Error('Visual daily request budget exhausted');
+      error.code = 'VISUAL_DAILY_BUDGET_EXHAUSTED';
+      throw error;
+    }
+    requestCounts.made++;
+    const compactInstruction = ' Responde con un JSON mínimo y válido, sin markdown ni texto fuera del objeto. Limita events a 3 elementos, people a 8, places y keywords a 8 cada uno; descripciones breves. No agregues campos.';
+    const systemPrompt = 'Redacta una ficha en español natural basada SOLO en lo visible. Devuelve exclusivamente un objeto JSON válido con estas claves: title, summary, events ({description, frame_index}), people ({description, frame_index}), places (textos), keywords (textos), date_clues ({description, frame_index}) y uncertainty. Todos los textos en español. No inventes diálogos, acciones entre fotogramas, lugares ni fechas. Incluye personas/grupos claramente visibles sin asignar identidades; si hay personas y no se distinguen, dilo brevemente. Deja people vacío solo si no hay personas visibles. Las pistas de fecha requieren texto legible. frame_index debe estar entre 1 y el número de fotogramas.' + (compact ? compactInstruction : ' Mantén todos los campos concisos.');
+    let response;
+    try {
+      response = await fetch(API_URL, {
+        method: 'POST',
+        redirect: 'error',
+        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: MODEL,
+          messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content }],
+          max_tokens: compact ? 1400 : 2200
+        }),
+        signal: AbortSignal.timeout(CONFIG.visual_request_timeout_ms)
+      });
+    } catch (error) {
+      const networkError = new Error(error.message || 'Provider request failed');
+      networkError.code = 'VISUAL_PROVIDER_NETWORK';
+      throw networkError;
+    }
+    if (!response.ok) {
+      const body = await readLimitedResponse(response, 16 * 1024);
+      let requestId = response.headers.get('x-request-id') || response.headers.get('x-openrouter-generation-id');
+      let diagnostics = '';
+      try {
+        const parsed = JSON.parse(body);
+        diagnostics = safeRoutingDiagnostics(parsed.error);
+        requestId ||= typeof parsed.id === 'string' ? parsed.id : null;
+      } catch { /* summarizeProviderError keeps a bounded message for non-JSON bodies. */ }
+      const error = new Error(`OpenRouter HTTP ${response.status}: ${summarizeProviderError(body)}${requestId ? ` [request_id=${requestId.slice(0, 160)}]` : ''}${diagnostics ? ` [${diagnostics}]` : ''}`);
+      error.code = 'OPENROUTER_HTTP_ERROR';
+      error.status = response.status;
+      error.requestId = requestId || null;
+      throw error;
+    }
+    const responseText = await readLimitedResponse(response, 1024 * 1024);
+    let data;
+    try { data = JSON.parse(responseText); }
+    catch {
+      const error = new Error('OpenRouter returned an invalid response envelope');
+      error.code = 'VISUAL_INVALID_MODEL_OUTPUT';
+      error.responseDiagnostics = {
+        model: MODEL,
+        request_id: response.headers.get('x-request-id') || response.headers.get('x-openrouter-generation-id') || null,
+        response_chars: responseText.length, envelope_json: false
+      };
+      throw error;
+    }
+    const message = data.choices?.[0]?.message;
+    const requestId = response.headers.get('x-request-id') || response.headers.get('x-openrouter-generation-id') || data.id || null;
+    const diagnostics = responseDiagnostics(data, message, requestId);
+    if (message?.refusal) {
+      const error = new Error(`OpenRouter refusal: ${String(message.refusal).slice(0, 300)}`);
+      error.responseDiagnostics = diagnostics;
+      throw error;
+    }
+    const outputText = typeof message?.content === 'string'
+      ? message.content
+      : Array.isArray(message?.content)
+        ? message.content.filter(item => item.type === 'text').map(item => item.text).join('')
+        : '';
+    if (!outputText) {
+      const error = new Error('OpenRouter returned no structured text');
+      error.code = 'VISUAL_INVALID_MODEL_OUTPUT';
+      error.responseDiagnostics = diagnostics;
+      throw error;
+    }
+    let parsedOutput;
+    try { parsedOutput = parseJsonObject(outputText); }
+    catch {
+      const error = new Error(`Invalid model response: JSON could not be recovered (finish_reason=${diagnostics.finish_reason || 'unknown'}, chars=${diagnostics.content_chars})`);
+      error.code = 'VISUAL_INVALID_MODEL_OUTPUT';
+      error.responseDiagnostics = diagnostics;
+      throw error;
+    }
+    try {
+      return { result: normalizeResult(parsedOutput, frames), usage: data.usage || null, requestId, diagnostics };
+    } catch (error) {
+      error.code = 'VISUAL_INVALID_MODEL_OUTPUT';
+      error.responseDiagnostics = { ...diagnostics, json_shape: summarizeJsonShape(parsedOutput) };
+      throw error;
+    }
+  };
+
   try {
-    response = await fetch(API_URL, {
-      method: 'POST',
-      redirect: 'error',
-      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-      model: MODEL,
-      provider: { require_parameters: true },
-      messages: [
-        {
-          role: 'system',
-          content: 'Redacta una ficha en español natural basada SOLO en lo visible en los fotogramas. Todos los textos deben estar en español; no mezcles otros idiomas ni escrituras, salvo nombres propios o texto que se vea escrito en el fotograma. No inventes diálogos, acciones entre fotogramas, lugares ni fechas. En people, incluye a las personas o grupos claramente visibles, aunque no puedas reconocerlos; describe cantidad aproximada, ubicación en la escena y ropa solo cuando se distinga. Si aparecen personas pero sus rasgos no se distinguen, incluye una descripción breve que lo diga. Deja people vacío únicamente si no hay personas visibles en ningún fotograma. No asignes nombres ni identidades. Si una acción o lugar es incierto, dilo brevemente en uncertainty. Las pistas de fecha requieren texto legible visible. Usa frame_index entre 1 y el número de imágenes suministradas. Mantén título, resumen y descripciones concisos.'
-        },
-        { role: 'user', content }
-      ],
-      response_format: {
-        type: 'json_schema',
-        json_schema: { name: 'video_visual_sheet', strict: true, schema: responseSchema }
-      },
-      max_tokens: 4000
-      }),
-      signal: AbortSignal.timeout(CONFIG.visual_request_timeout_ms)
-    });
-  } catch (error) {
-    const networkError = new Error(error.message || 'Provider request failed');
-    networkError.code = 'VISUAL_PROVIDER_NETWORK';
-    throw networkError;
+    return await request(false);
+  } catch (firstError) {
+    if (firstError.code !== 'VISUAL_INVALID_MODEL_OUTPUT') throw firstError;
+    try {
+      const recovered = await request(true);
+      recovered.usage = combineUsage(firstError.responseDiagnostics?.usage, recovered.usage);
+      recovered.diagnostics = { retry: 'compact_reanalysis', first_response: firstError.responseDiagnostics, final_response: recovered.diagnostics };
+      return recovered;
+    } catch (retryError) {
+      if (retryError.code === 'VISUAL_INVALID_MODEL_OUTPUT') {
+        retryError.responseDiagnostics = {
+          retry: 'compact_reanalysis_failed', first_response: firstError.responseDiagnostics,
+          final_response: retryError.responseDiagnostics
+        };
+      }
+      throw retryError;
+    }
   }
-  if (!response.ok) {
-    const body = await readLimitedResponse(response, 16 * 1024);
-    throw new Error(`OpenRouter HTTP ${response.status}: ${summarizeProviderError(body)}`);
-  }
-  const responseText = await readLimitedResponse(response, 1024 * 1024);
-  let data;
-  try { data = JSON.parse(responseText); }
-  catch { throw new Error('OpenRouter returned invalid JSON'); }
-  const message = data.choices?.[0]?.message;
-  if (message?.refusal) throw new Error(`OpenRouter refusal: ${String(message.refusal).slice(0, 300)}`);
-  const outputText = typeof message?.content === 'string'
-    ? message.content
-    : Array.isArray(message?.content)
-      ? message.content.filter(item => item.type === 'text').map(item => item.text).join('')
-      : '';
-  if (!outputText) throw new Error('OpenRouter returned no structured text');
-  let parsedOutput;
-  try { parsedOutput = JSON.parse(outputText); }
-  catch {
-    const finishReason = data.choices?.[0]?.finish_reason || 'unknown';
-    throw new Error(`Invalid model response: structured output was not valid JSON (finish_reason=${finishReason}, chars=${outputText.length})`);
-  }
-  return { result: normalizeResult(parsedOutput, frames), usage: data.usage || null };
 }
 
 async function analyzeVideo(row, apiKey) {
@@ -311,7 +427,7 @@ async function analyzeVideo(row, apiKey) {
       return true;
     }
     setWorkerActivity('visual-analyzer', { videoId: row.id, path: row.relative_path, phase: 'analizando con el proveedor' });
-    const { result, usage } = await describeFrames(frames, apiKey);
+    const { result, usage, requestId, diagnostics } = await describeFrames(frames, apiKey);
     const finalStat = await fs.promises.stat(fullPath);
     if (`${finalStat.size}:${Math.round(finalStat.mtimeMs)}` !== row.fingerprint) throw new Error('Video changed during analysis');
     const faceAssignedNames = db.prepare(`SELECT DISTINCT people.name FROM face_observations
@@ -359,7 +475,8 @@ async function analyzeVideo(row, apiKey) {
       WHERE video_id = ? AND reviewed_at IS NULL`).all(row.id).map(item => item.analysis_revision);
     await removeOldEvidence(row.id, new Set([revision, ...pendingRevisions]));
     setWorkerActivity('visual-analyzer', { phase: null, result: `Ficha visual guardada para ${row.relative_path}` });
-    console.log(JSON.stringify({ video_id: row.id, frames: frames.length, model: MODEL, usage }));
+    console.log(JSON.stringify({ video_id: row.id, frames: frames.length, model: MODEL, usage, request_id: requestId,
+      response_diagnostics: diagnostics }));
   } catch (error) {
     if (error.code === 'VISUAL_DAILY_BUDGET_EXHAUSTED') {
       db.prepare(`UPDATE videos SET visual_status = 'pending', visual_attempts = MAX(visual_attempts - 1, 0),
@@ -433,7 +550,12 @@ async function analyzeVideo(row, apiKey) {
       phase: retryAt ? 'esperando reintento' : 'fallo sin reintento automático',
       videoId: row.id, path: row.relative_path, error: message
     });
-    console.error(`Visual analysis failed for video ${row.id}: ${error.message}`);
+    console.error(JSON.stringify({
+      event: 'visual_analysis_failed', video_id: row.id, model: MODEL,
+      status: error.status || null, request_id: error.requestId || null,
+      response_diagnostics: error.responseDiagnostics || null,
+      error: String(error.message).slice(0, 1000)
+    }));
     if (authenticationFailure || providerConfigurationFailure || providerRateLimit || providerRouteUnavailable || providerNetworkFailure) throw error;
   }
   return true;

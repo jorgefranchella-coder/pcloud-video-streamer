@@ -1,0 +1,10 @@
+[Unit]
+Description=Continue bounded pCloud video metadata refinement batches
+
+[Timer]
+OnBootSec=20min
+OnUnitInactiveSec=1h
+Unit=pcloud-video-refinement.service
+
+[Install]
+WantedBy=timers.target

@@ -539,6 +539,44 @@ if (currentMigration < 14) {
   db.prepare('INSERT INTO schema_migrations (version, description) VALUES (14, ?)')
     .run('Record automatic face identity assignments and similarity scores');
 }
+if (currentMigration < 15) {
+  db.exec(`ALTER TABLE people ADD COLUMN description TEXT NOT NULL DEFAULT '';
+    CREATE TABLE video_refinements (
+      id INTEGER PRIMARY KEY,
+      video_id INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+      input_hash TEXT NOT NULL,
+      title TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      model TEXT NOT NULL,
+      prompt_version TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'proposed' CHECK (status IN ('proposed', 'approved', 'rejected')),
+      generated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      reviewed_at TEXT,
+      UNIQUE(video_id, input_hash)
+    );
+    CREATE INDEX video_refinements_video_idx ON video_refinements(video_id, id DESC);
+    CREATE TABLE video_refinement_attempts (
+      video_id INTEGER PRIMARY KEY REFERENCES videos(id) ON DELETE CASCADE,
+      input_hash TEXT NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      next_attempt_at TEXT,
+      last_error TEXT
+    );
+    CREATE TABLE refinement_daily_requests (
+      utc_day TEXT PRIMARY KEY,
+      request_count INTEGER NOT NULL DEFAULT 0
+    );`);
+  db.prepare('INSERT INTO schema_migrations (version, description) VALUES (15, ?)')
+    .run('Store person context and reviewed video title/summary proposals');
+}
+if (currentMigration < 16) {
+  db.exec(`ALTER TABLE video_refinements ADD COLUMN generated_title TEXT;
+    ALTER TABLE video_refinements ADD COLUMN generated_summary TEXT;
+    UPDATE video_refinements SET generated_title = title, generated_summary = summary
+      WHERE generated_title IS NULL OR generated_summary IS NULL;`);
+  db.prepare('INSERT INTO schema_migrations (version, description) VALUES (16, ?)')
+    .run('Preserve generated text separately from human edits');
+}
 const finalSchemaVersion = db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get().version;
 db.pragma(`user_version = ${finalSchemaVersion}`);
 db.exec('COMMIT');
@@ -637,7 +675,7 @@ function status() {
   const monthlyCost = getVisualMonthlySpend();
   const providerControl = getVisualProviderControl();
   const automationControl = getAutomationControl();
-  const workerHistory = Object.fromEntries(['indexer', 'visual-analyzer', 'face-embedding-indexer'].map(worker => [worker,
+  const workerHistory = Object.fromEntries(['indexer', 'visual-analyzer', 'face-embedding-indexer', 'refinement-writer'].map(worker => [worker,
     db.prepare(`SELECT id, status, started_at, heartbeat_at, finished_at, last_result, last_error
       FROM worker_run_history WHERE worker = ? ORDER BY id DESC LIMIT 10`).all(worker)
   ]));
@@ -961,7 +999,7 @@ function getFaceObservation(faceId, modelVersion) {
     .get(faceId, modelVersion) || null;
 }
 
-function findFaceNeighbors(faceId, modelVersion, limit = 24, suggestionThreshold = 0.5, autoAssignmentThreshold = 0.8) {
+function findFaceNeighbors(faceId, modelVersion, limit = 24, suggestionThreshold = 0.5, autoAssignmentThreshold = 0.75) {
   const reference = getFaceObservation(faceId, modelVersion);
   if (!reference || reference.review_status === 'rejected' || reference.fingerprint !== reference.current_fingerprint ||
       !['done', 'failed'].includes(reference.video_status)) return null;
@@ -982,7 +1020,11 @@ function findFaceNeighbors(faceId, modelVersion, limit = 24, suggestionThreshold
     if (!candidate) continue;
     let score = 0;
     for (let i = 0; i < vector.length; i += 1) score += vector[i] * candidate[i];
-    nearest.push({ ...row, vector: undefined, similarity: score });
+    // Confirmed faces remain identity references for recommendations, but the
+    // selectable neighbor list is only for faces that still need an identity.
+    if (row.review_status === 'unassigned') {
+      nearest.push({ ...row, vector: undefined, similarity: score });
+    }
     if (row.review_status === 'confirmed' && row.person_id) {
       const existing = identityCandidates.get(row.person_id);
       if (!existing || score > existing.similarity) {
@@ -1185,7 +1227,7 @@ function listPeople() {
       UNION ALL SELECT f.person_id, f.video_id FROM face_observations f JOIN videos v ON v.id = f.video_id
         WHERE f.person_id IS NOT NULL AND f.review_status = 'confirmed' AND f.fingerprint = v.fingerprint AND v.status IN ('done', 'failed')
     )
-    SELECT people.id, people.name,
+    SELECT people.id, people.name, people.description,
       (SELECT COUNT(*) FROM person_appearances a WHERE a.person_id = people.id) AS appearances,
       (SELECT COUNT(DISTINCT video_id) FROM person_appearances a WHERE a.person_id = people.id) AS videos
     FROM people WHERE people.merged_into IS NULL ORDER BY people.name COLLATE NOCASE`).all();
@@ -1222,9 +1264,19 @@ function renamePerson(personId, newName) {
       db.prepare('UPDATE videos SET visual_search_text = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
         .run(searchText, row.id);
     }
-    return db.prepare('SELECT id, name FROM people WHERE id = ?').get(personId);
+    return db.prepare('SELECT id, name, description FROM people WHERE id = ?').get(personId);
   });
   return rename.immediate();
+}
+
+function updatePersonDescription(personId, description) {
+  if (!Number.isSafeInteger(personId) || personId < 1 || typeof description !== 'string' || description.length > 500) {
+    throw new Error('Descripción inválida');
+  }
+  const clean = description.trim().replace(/\s+/g, ' ');
+  const result = db.prepare('UPDATE people SET description = ? WHERE id = ? AND merged_into IS NULL')
+    .run(clean, personId);
+  return result.changes ? db.prepare('SELECT id, name, description FROM people WHERE id = ?').get(personId) : null;
 }
 
 function refreshSearchTextForVideos(videoIds) {
@@ -1787,7 +1839,7 @@ module.exports = {
   assignFaceObservations, rejectFaceObservations, identifiedFacesForVideo,
   setConfirmedPeople, listPeople, identifiedPeopleForVideo, staleIdentificationsForVideo, identityHistoryForVideo,
   dismissStaleIdentification,
-  importVisualSidecar, setVideoPerson, retryVisualAnalysis, retryTechnicalAnalysis, renamePerson, mergePeople, undoPeopleMerge, listPersonMerges,
+  importVisualSidecar, setVideoPerson, retryVisualAnalysis, retryTechnicalAnalysis, renamePerson, updatePersonDescription, mergePeople, undoPeopleMerge, listPersonMerges,
   withJobLock, setWorkerConfiguration, setWorkerActivity, reserveVisualDailyRequest,
   getVisualProviderControl, setVisualProviderControl, clearVisualProviderControl, getVisualMonthlySpend, getVisualCostEstimate,
   getAutomationControl, setAutomationPaused

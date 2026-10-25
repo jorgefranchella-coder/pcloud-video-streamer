@@ -74,7 +74,7 @@ function faceConfiguration() {
   const minFaceSize = integerSetting('FACE_MIN_FACE_SIZE', 48, 20, 512);
   const detectionThreshold = decimalSetting('FACE_DETECTION_THRESHOLD', 0.75, 0.1, 1);
   const suggestionThreshold = decimalSetting('FACE_SUGGESTION_THRESHOLD', 0.5, 0, 1);
-  const autoAssignmentThreshold = decimalSetting('FACE_AUTO_ASSIGNMENT_THRESHOLD', 0.8, 0, 1);
+  const autoAssignmentThreshold = decimalSetting('FACE_AUTO_ASSIGNMENT_THRESHOLD', 0.75, 0, 1);
   if (suggestionThreshold >= autoAssignmentThreshold) {
     throw new Error('FACE_SUGGESTION_THRESHOLD must be lower than FACE_AUTO_ASSIGNMENT_THRESHOLD');
   }

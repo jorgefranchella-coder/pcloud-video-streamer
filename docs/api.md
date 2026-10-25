@@ -19,31 +19,38 @@ Errores comunes de edición: `503` si no se configuró el token, `401` si no coi
 | `DELETE /api/access/session` | Elimina la cookie de sesión |
 | `GET /api/list` | `path` opcional, raíz por defecto; lista carpetas y extensiones reconocidas |
 | `GET /api/stream` | `path` obligatorio y extensión de video reconocida; entrega archivo y acepta rango simple |
-| `GET /api/metadata` | `path` obligatorio; ficha del índice |
+| `GET /api/metadata` | `path` obligatorio; ficha del índice y estado/propuesta de redacción vigente en `refinement` |
 | `POST /api/metadata/export` | `{ "path": "..." }`; crea `<video>.metadata.json` con fingerprint, ficha actual y nombres confirmados. Solo escribe si no existe un sidecar; requiere edición habilitada y sesión/Bearer autorizado |
 | `POST /api/metadata/import` | `{ "path": "..." }`; valida e importa el sidecar vecino si coincide el fingerprint y todavía no existe una revisión visual. No restaura embeddings faciales ni sobrescribe fichas; requiere edición habilitada |
+| `POST /api/jellyfin/preview` | `{ "path": "..." }`; busca por ruta exacta en Jellyfin y devuelve los campos que cambiarían y `refinement_token` para confirmar esa vista previa. No modifica Jellyfin; requiere edición habilitada y variables Jellyfin |
+| `POST /api/jellyfin/sync` | `{ "path": "...", "fingerprint": "...", "visual_revision": "...", "refinement_token": "..." }`; vuelve a validar ficha y redacción tras la vista previa y escribe en Jellyfin. Requiere edición habilitada |
+| `POST /api/refinement/review` | `{ "path": "...", "input_hash": "...", "action": "approved", "title": "...", "summary": "..." }` o `action: "rejected"`; revisa una propuesta vigente y requiere edición |
+| `GET /api/refinement/review-queue` | Devuelve hasta 200 propuestas vigentes pendientes, con ruta, texto editable y ficha visual original; requiere sesión de lectura |
+| `POST /api/refinement/retry` | `{ "path": "...", "input_hash": "..." }`; reinicia los intentos de una propuesta fallida vigente; requiere edición |
+| `POST /api/index/run` | `{ "process": "technical" | "visual" | "faces" | "refinement" | "pipeline" }`; inicia en el momento un lote del proceso seleccionado, responde `202` con el PID y estado, y rechaza con `409` si la automatización está pausada o la biblioteca está ocupada. Requiere autorización de edición |
 | `GET /api/metadata/evidence` | `path`, `revision`, `at_seconds`; JPEG de evidencia activa o de una identidad anterior pendiente |
 | `GET /api/faces/inbox` | `after`, `limit`; rostros sin nombre de la versión facial configurada y progreso de indexación |
 | `GET /api/faces/automatic` | `after`, `limit`; asignaciones faciales automáticas vigentes para auditar o corregir |
-| `GET /api/faces/:id/neighbors` | Busca embeddings faciales cercanos entre videos vigentes; no asigna identidades |
+| `GET /api/faces/:id/neighbors` | Busca rostros sin identidad cercanos entre videos vigentes y recomienda identidades usando rostros confirmados; no asigna identidades |
 | `GET /api/faces/:id/preview` | JPEG recortado generado bajo demanda desde pCloud; requiere la sesión de lectura y no se guarda en disco |
 | `POST /api/faces/assign` | `{ "face_ids": [1, 2], "person_id": 7 }` o `{ "face_ids": [1], "person_name": "Nombre" }`; confirma identidades; requiere sesión autenticada o Bearer en modo local |
 | `POST /api/faces/reject` | `{ "face_ids": [1, 2] }`; ignora detecciones sin identificar seleccionadas, elimina sus embeddings y las conserva excluidas al reindexar el mismo video, fingerprint y versión del índice; no afecta identidades confirmadas. Requiere sesión autenticada o Bearer en modo local |
 | `POST /api/metadata/visual/retry` | `{ "path": "..." }`; pone un análisis fallido en cola, reinicia sus intentos y registra la acción; requiere sesión autenticada o Bearer en modo local |
 | `POST /api/metadata/technical/retry` | `{ "path": "..." }`; devuelve una ficha técnica fallida a la cola del próximo inventario y registra la acción; requiere sesión autenticada o Bearer en modo local |
-| `GET /api/index/status` | Conteos, último recorrido y configuración efectiva no secreta registrada por cada trabajador |
+| `GET /api/index/status` | Conteos, último recorrido, progreso/timer de redacción y configuración efectiva no secreta registrada por cada trabajador |
 | `GET /api/search` | `q`, `from`, `to`, `person_id`, `folder`, `limit`, `offset` |
 | `GET /api/people` | Catálogo de nombres y cantidades |
 | `PATCH /api/people/:id` | `{ "name": "..." }`; renombra y actualiza la búsqueda |
+| `PATCH /api/people/:id/description` | `{ "description": "..." }`; guarda o borra el contexto editable de una persona, máximo 500 caracteres; requiere edición |
 | `PATCH /api/people/:id/merge` | `{ "target_person_id": 7 }`; fusiona en el destino |
 | `POST /api/people/merges/:id/undo` | Deshace una fusión activa |
 | `PUT /api/metadata/person` | `{ "person_ids": [7, 8] }`; asigna varias identidades a una observación |
 | `POST /api/metadata/person/review-stale` | Marca una identificación antigua revisada sin reasignarla |
 | `PATCH /api/metadata/people` | Lista general de nombres de compatibilidad |
 
-No existen endpoints para iniciar o cancelar análisis, editar fechas ni regenerar fichas desde la web. Las rutas de escritura requieren `METADATA_EDIT_TOKEN` configurado; con `ACCESS_TOKEN`, la cookie de sesión autentica las escrituras sin un segundo token por acción. La exportación solo se ofrece con ficha técnica y visual vigentes; no sobrescribe archivos existentes ni modifica el video. La importación requiere ficha técnica lista, ausencia de una ficha visual previa, un sidecar regular menor a 2 MiB y un fingerprint idéntico con algoritmo conocido. Ese fingerprint compara tamaño y mtime redondeado; no es un hash criptográfico del contenido. La importación restaura asignaciones narrativas confirmadas por nombre y metadata técnica si falta localmente; un resumen facial no equivale a asignaciones faciales activas.
+No existe un endpoint para cancelar trabajos ni editar fechas desde la web. Las rutas de escritura requieren `METADATA_EDIT_TOKEN` configurado; con `ACCESS_TOKEN`, la cookie de sesión autentica las escrituras sin un segundo token por acción. La exportación solo se ofrece con ficha técnica y visual vigentes; no sobrescribe archivos existentes ni modifica el video. La importación requiere ficha técnica lista, ausencia de una ficha visual previa, un sidecar regular menor a 2 MiB y un fingerprint idéntico con algoritmo conocido. Ese fingerprint compara tamaño y mtime redondeado; no es un hash criptográfico del contenido. La importación restaura asignaciones narrativas confirmadas por nombre y metadata técnica si falta localmente; un resumen facial no equivale a asignaciones faciales activas.
 
-`GET /api/metadata` incluye `identified_faces`, un conteo por persona obtenido de embeddings confirmados localmente. El catálogo, las fusiones y los filtros exactos de búsqueda incluyen esas asignaciones. Las similitudes de `/neighbors` son cosenos de embeddings SFace, no probabilidades; el cliente debe presentarlas como sugerencias y pedir confirmación humana.
+`GET /api/metadata` incluye `identified_faces`, un conteo por persona obtenido de embeddings confirmados localmente, y `jellyfin_configured`, un booleano sin secretos. El catálogo, las fusiones y los filtros exactos de búsqueda incluyen esas asignaciones. Las similitudes de `/neighbors` son cosenos de embeddings SFace, no probabilidades; el cliente debe presentarlas como sugerencias y pedir confirmación humana.
 
 ## Directorios y reproducción
 
@@ -102,7 +109,7 @@ Las listas `visual_people`, `visual_events` y `visual_date_clues` contienen obje
 
 ## Progreso
 
-`GET /api/index/status` incluye `worker_configuration.technical` y `worker_configuration.visual` después de que cada etapa haya iniciado. Incluye los límites efectivos, flags de reintento, modo puntual/modelo visual y hora del registro; nunca incluye `OPENROUTER_API_KEY` ni `METADATA_EDIT_TOKEN`.
+`GET /api/index/status` incluye `worker_configuration.technical` y `worker_configuration.visual` después de que cada etapa haya iniciado. Incluye los límites efectivos, flags de reintento, modo puntual/modelo visual y hora del registro; nunca incluye `OPENROUTER_API_KEY` ni `METADATA_EDIT_TOKEN`. `manual_process_runs` informa los inicios solicitados desde la interfaz en este proceso del servidor.
 
 También devuelve `schema_version` y `applied_migrations`, con las migraciones SQLite numeradas aplicadas.
 
@@ -150,6 +157,8 @@ Ejemplo basado en la ejecución documentada, no respuesta fija. Las claves de es
 `pipeline_timer` da la misma información de `pcloud-video-pipeline.timer`. `pipeline.js` ejecuta inventario técnico y, al completarlo, un lote visual limitado. La unidad y el timer son optativos; habilitarlos puede consumir cuota del proveedor.
 
 `automation_control` informa si el procesamiento está pausado, cuándo y desde qué interfaz se cambió, más los últimos 20 eventos de un historial SQLite limitado a 200 entradas. `POST /api/index/control` recibe `{ "paused": true }` o `false` y requiere sesión autenticada o `Authorization: Bearer <METADATA_EDIT_TOKEN>` en modo local. El control detiene nuevas ejecuciones y evita que el analizador tome otro video; el inventario técnico o la solicitud visual que ya está en curso termina normalmente.
+
+La interfaz permite iniciar bajo demanda el inventario técnico, el análisis visual, la indexación facial local, la redacción o el pipeline técnico + visual. Cada inicio ejecuta el mismo script Node que usan los timers, con la configuración del servicio web y los límites de lote de los servicios. Los procesos comparten el bloqueo SQLite de biblioteca; el endpoint evita iniciar si otro trabajador la está usando. El control de pausa global debe estar reanudado. La pausa del proveedor visual bloquea el inicio manual visual hasta que venza o se corrija.
 
 `visual_retry_wait` informa cuántos fallos tienen reintento pendiente y el próximo horario. Los errores transitorios usan espera exponencial hasta 24 horas; `429` comienza en cinco minutos y otros transitorios en un minuto. Cada fingerprint admite hasta `MAX_VISUAL_ATTEMPTS` intentos automáticos (por defecto cinco). Los errores `401`, `403` y otros `4xx` no reciben reintento automático. `RETRY_VISUAL_FAILED=1` es necesario para tomar fallos ya vencidos en una ejecución posterior.
 

@@ -2,18 +2,20 @@
 
 Aplicación web progresiva instalable para explorar una biblioteca familiar montada con rclone, reproducir videos y encontrar escenas mediante fichas técnicas, descripciones visuales y personas identificadas. Sin conexión muestra una pantalla informativa; navegar la biblioteca y reproducir videos requiere acceso al servidor.
 
-Documentación revisada contra el código el **21 de octubre de 2026**. Las cifras de ejecución se conservan como una fotografía fechada en [Operación](docs/operacion.md); el estado actual se consulta en la interfaz o en `/api/index/status`.
+Documentación revisada contra el código el **24 de octubre de 2026**. Las cifras de ejecución se conservan como una fotografía fechada en [Operación](docs/operacion.md); el estado actual se consulta en la interfaz o en `/api/index/status`.
 
 ## Qué hace hoy
 
 - Navegación por carpetas y reproducción HTML5 con peticiones HTTP Range.
 - Inventario incremental en SQLite y extracción de duración, resolución, formato, fechas, ubicación y tags de cámara/dispositivo presentes en los archivos con `ffprobe`.
 - Exportación e importación manual de fichas mediante sidecars JSON junto al video, sin reescribir el original y verificando su fingerprint.
+- Sincronización confirmada de fichas a Jellyfin por ruta exacta, con la clave de API guardada solo en el servidor.
 - Análisis de hasta cuatro fotogramas mediante **OpenRouter Chat Completions**, con una ficha en español y referencias temporales.
+- Redacción posterior solo con texto: combina ficha visual, fecha, identidades confirmadas y contexto escrito por el usuario para proponer un título y resumen; requiere revisión antes de usarse en Jellyfin.
 - Búsqueda textual FTS5, filtros por fecha sugerida, persona exacta o carpeta, y paginación.
 - Identificación facial local con YuNet + SFace: embeddings en SQLite, sugerencias de vecinos, asignación grupal y opción de ignorar detecciones sin conservar sus embeddings.
 - El modelo de OpenRouter crea la descripción narrativa; los fotogramas para reconocimiento de personas se procesan en el servidor y nunca se envían al proveedor.
-- Panel de progreso técnico, visual y de rostros locales, con lotes recientes y contador diario de solicitudes del proveedor.
+- Panel de progreso técnico, visual, facial y de redacción, con lotes recientes y contadores diarios de solicitudes.
 
 El análisis narrativo no transcribe audio ni examina cada instante del video. Las coincidencias faciales son sugerencias; el usuario confirma cada grupo. La reproducción depende de los códecs que soporte el navegador; no hay transcodificación. Los indexadores visual y facial tienen temporizadores independientes y optativos.
 

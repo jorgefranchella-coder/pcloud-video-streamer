@@ -36,6 +36,7 @@
         <label class="mt-2 flex items-center gap-2 text-xs text-gray-400"><input id="searchWithinFolder" type="checkbox" disabled />Buscar solo en esta carpeta</label>
         <button id="peopleDirectoryBtn" class="mt-3 w-full px-3 py-2 text-left text-sm rounded bg-gray-700 hover:bg-gray-600">Personas identificadas</button>
         <button id="faceReviewBtn" class="mt-2 w-full px-3 py-2 text-left text-sm rounded bg-gray-700 hover:bg-gray-600">Revisar rostros sin nombre</button>
+        <button id="refinementReviewBtn" class="mt-2 w-full px-3 py-2 text-left text-sm rounded bg-violet-900/60 hover:bg-violet-800">Revisar fichas de videos</button>
       </div>
       
       <nav class="flex-1 p-3 folder-tree" id="folderTree" aria-label="Carpetas y videos">
@@ -74,7 +75,7 @@
             <h3 class="text-sm font-semibold">Estado de la biblioteca</h3>
             <span id="progressUpdated" class="text-xs text-gray-400">Cargando estado…</span>
           </div>
-          <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <div>
               <div class="mb-1 flex justify-between gap-2 text-xs">
                 <span class="text-gray-300">Inventario técnico</span>
@@ -105,11 +106,33 @@
               </div>
               <p id="faceProgressDetail" class="mt-1 text-xs text-gray-500">Esperando datos</p>
             </div>
+            <div>
+              <div class="mb-1 flex justify-between gap-2 text-xs">
+                <span class="text-gray-300">Redacción familiar</span>
+                <span id="refinementProgressLabel" class="text-gray-400">—</span>
+              </div>
+              <div id="refinementProgressBar" class="h-2 overflow-hidden rounded-full bg-gray-700" role="progressbar" aria-label="Propuestas de redacción" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                <div class="h-full rounded-full bg-violet-400 transition-[width] duration-500" style="width:0%"></div>
+              </div>
+              <p id="refinementProgressDetail" class="mt-1 text-xs text-gray-500">Esperando datos</p>
+            </div>
           </div>
           <p id="effectiveConfiguration" class="mt-2 text-xs text-gray-500">Configuración efectiva: esperando datos</p>
           <div class="mt-2 flex flex-wrap items-center gap-2">
             <span id="automationControlStatus" class="text-xs text-gray-400" role="status" aria-live="polite"></span>
             <button id="automationControlBtn" type="button" class="hidden rounded border border-gray-600 px-2 py-1 text-xs hover:bg-gray-700 disabled:opacity-50">Pausar procesamiento</button>
+          </div>
+          <div id="manualProcessControls" class="hidden mt-2 flex flex-wrap items-center gap-2">
+            <label for="manualProcessSelect" class="text-xs text-gray-300">Ejecutar ahora</label>
+            <select id="manualProcessSelect" class="rounded border border-gray-600 bg-gray-800 px-2 py-1 text-xs text-white disabled:opacity-50">
+              <option value="technical">Inventario técnico</option>
+              <option value="visual">Fichas visuales</option>
+              <option value="faces">Indexar rostros localmente</option>
+              <option value="refinement">Mejorar redacción</option>
+              <option value="pipeline">Pipeline técnico + visual</option>
+            </select>
+            <button id="manualProcessBtn" type="button" class="rounded border border-sky-700 px-2 py-1 text-xs text-sky-200 hover:bg-sky-950 disabled:opacity-50">Iniciar</button>
+            <span id="manualProcessStatus" class="text-xs text-gray-400" role="status" aria-live="polite"></span>
           </div>
           <details id="visualRetryHistoryDetails" class="mt-2 hidden text-xs text-gray-400">
             <summary class="cursor-pointer">Historial de reintentos manuales (técnicos y visuales)</summary>
@@ -166,6 +189,7 @@
         <p id="metadataDateEvidence" class="text-xs text-gray-400 mt-2"></p>
         <div class="mt-2 flex flex-wrap items-center gap-2">
           <button id="exportMetadataBtn" type="button" class="hidden rounded border border-gray-600 px-2 py-1 text-xs hover:bg-gray-700">Exportar ficha JSON junto al video</button>
+          <button id="syncJellyfinBtn" type="button" class="hidden rounded border border-emerald-700 px-2 py-1 text-xs text-emerald-200 hover:bg-emerald-950">Sincronizar ficha con Jellyfin</button>
           <button id="importMetadataBtn" type="button" class="hidden rounded border border-gray-600 px-2 py-1 text-xs hover:bg-gray-700">Importar ficha JSON</button>
           <span id="metadataExportStatus" class="text-xs text-gray-400" role="status" aria-live="polite"></span>
         </div>
@@ -176,6 +200,27 @@
         <div id="visualMetadata" class="hidden mt-4 border-t border-gray-700 pt-3">
           <h4 id="visualTitle" class="font-medium"></h4>
           <p id="visualSummary" class="text-sm text-gray-300 mt-1"></p>
+          <div id="refinementPanel" class="mt-3 rounded-lg border border-gray-700 bg-gray-900/40 p-3">
+            <p id="refinementStatus" class="text-xs text-gray-400" role="status" aria-live="polite"></p>
+            <button id="retryRefinementBtn" type="button" class="hidden mt-2 rounded border border-gray-600 px-2 py-1 text-xs hover:bg-gray-700">Reintentar redacción</button>
+            <div id="refinementProposal" class="hidden mt-2 space-y-2">
+              <label class="block text-xs text-gray-300">Título propuesto
+                <input id="refinementTitle" maxlength="120" class="mt-1 w-full rounded border border-gray-600 bg-gray-800 px-2 py-2 text-sm text-white" />
+              </label>
+              <label class="block text-xs text-gray-300">Descripción propuesta
+                <textarea id="refinementSummary" maxlength="1600" rows="4" class="mt-1 w-full rounded border border-gray-600 bg-gray-800 px-2 py-2 text-sm text-white"></textarea>
+              </label>
+              <div class="flex flex-wrap gap-2">
+                <button id="approveRefinementBtn" type="button" class="rounded bg-emerald-700 px-3 py-2 text-xs hover:bg-emerald-600">Aprobar texto</button>
+                <button id="rejectRefinementBtn" type="button" class="rounded border border-gray-600 px-3 py-2 text-xs hover:bg-gray-700">Descartar propuesta</button>
+              </div>
+            </div>
+            <details id="originalVisualDetails" class="hidden mt-2 text-xs text-gray-400">
+              <summary class="cursor-pointer">Ver descripción visual original</summary>
+              <p id="originalVisualTitle" class="mt-2 font-medium"></p>
+              <p id="originalVisualSummary" class="mt-1"></p>
+            </details>
+          </div>
           <p id="visualUncertainty" class="text-xs text-amber-300 mt-2"></p>
           <div class="mt-3">
             <h5 class="text-sm font-semibold">Personas observadas</h5>
@@ -214,6 +259,7 @@
         <label class="mt-2 flex items-center gap-2 text-xs text-gray-400"><input id="mobileSearchWithinFolder" type="checkbox" disabled />Buscar solo en esta carpeta</label>
         <button id="mobilePeopleDirectoryBtn" class="mt-3 w-full px-3 py-2 text-left text-sm rounded bg-gray-700 hover:bg-gray-600">Personas identificadas</button>
         <button id="mobileFaceReviewBtn" class="mt-2 w-full px-3 py-2 text-left text-sm rounded bg-gray-700 hover:bg-gray-600">Revisar rostros sin nombre</button>
+        <button id="mobileRefinementReviewBtn" class="mt-2 w-full px-3 py-2 text-left text-sm rounded bg-violet-900/60 hover:bg-violet-800">Revisar fichas de videos</button>
       </div>
       <nav class="flex-1 p-3 folder-tree overflow-y-auto" id="mobileFolderTree" aria-label="Carpetas y videos"></nav>
     </aside>
@@ -230,6 +276,18 @@
       <button id="closePeopleDialog" type="button" class="rounded px-2 py-1 text-gray-400 hover:bg-gray-700 hover:text-white" aria-label="Cerrar">✕</button>
     </div>
     <div id="peopleDirectory" class="max-h-[60vh] overflow-y-auto p-3"></div>
+  </dialog>
+
+  <dialog id="refinementReviewDialog" aria-labelledby="refinementReviewTitle" aria-describedby="refinementReviewDescription" class="w-[min(72rem,calc(100%-2rem))] max-h-[90vh] overflow-y-auto rounded-xl border border-gray-700 bg-gray-800 p-0 text-gray-100 shadow-2xl backdrop:bg-black/70">
+    <div class="sticky top-0 z-10 flex items-center justify-between border-b border-gray-700 bg-gray-800 p-4">
+      <div>
+        <h2 id="refinementReviewTitle" class="font-semibold">Fichas pendientes de revisión</h2>
+        <p id="refinementReviewDescription" class="mt-1 text-xs text-gray-400">Editá título y descripción y aprobá, o descartá la propuesta. La ficha visual original queda preservada.</p>
+      </div>
+      <button id="closeRefinementReview" type="button" class="rounded px-2 py-1 text-gray-400 hover:bg-gray-700 hover:text-white" aria-label="Cerrar">✕</button>
+    </div>
+    <p id="refinementQueueStatus" class="p-4 text-sm text-gray-400" role="status" aria-live="polite">Cargando propuestas…</p>
+    <div id="refinementQueue" class="space-y-3 px-4 pb-4"></div>
   </dialog>
 
   <dialog id="faceReviewDialog" aria-labelledby="faceReviewTitle" aria-describedby="faceReviewDescription" class="w-[min(64rem,calc(100%-2rem))] max-h-[90vh] overflow-y-auto rounded-xl border border-gray-700 bg-gray-800 p-0 text-gray-100 shadow-2xl backdrop:bg-black/70">
