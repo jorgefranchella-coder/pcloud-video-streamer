@@ -140,10 +140,10 @@ function touchWorkerRun(worker) {
 
 function setWorkerActivity(worker, { phase = null, videoId = null, path = null, result = null, error = null } = {}) {
   db.prepare(`UPDATE worker_runs SET heartbeat_at = CURRENT_TIMESTAMP, phase = ?, current_video_id = ?,
-      current_path = ?, last_result = COALESCE(?, last_result), last_error = ?
+      current_path = ?, last_result = COALESCE(?, last_result), last_error = COALESCE(?, last_error)
     WHERE worker = ? AND status = 'running'`).run(phase, videoId, path, result, error, worker);
   db.prepare(`UPDATE worker_run_history SET heartbeat_at = CURRENT_TIMESTAMP,
-      last_result = COALESCE(?, last_result), last_error = ? WHERE id =
+      last_result = COALESCE(?, last_result), last_error = COALESCE(?, last_error) WHERE id =
       (SELECT MAX(id) FROM worker_run_history WHERE worker = ? AND status = 'running')`)
     .run(result, error, worker);
 }
@@ -161,7 +161,9 @@ function finishWorkerRun(worker, status, error = null) {
 function withJobLock(name, operation) {
   const token = crypto.randomUUID();
   const host = os.hostname();
-  const lockNames = [...new Set([name, 'video-library-pipeline'])];
+  // Each stage verifies the video fingerprint before saving. Holding a global
+  // lock during remote requests needlessly blocks the local workers.
+  const lockNames = [name];
   const acquire = db.transaction(() => {
     const staleLocks = [];
     for (const lockName of lockNames) {
@@ -577,6 +579,14 @@ if (currentMigration < 16) {
   db.prepare('INSERT INTO schema_migrations (version, description) VALUES (16, ?)')
     .run('Preserve generated text separately from human edits');
 }
+if (currentMigration < 17) {
+  db.exec(`ALTER TABLE face_video_indexes ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE face_video_indexes ADD COLUMN next_attempt_at TEXT;
+    UPDATE face_video_indexes SET attempts = 1 WHERE status = 'failed';
+    CREATE INDEX face_video_retry_idx ON face_video_indexes(status, next_attempt_at, indexed_at);`);
+  db.prepare('INSERT INTO schema_migrations (version, description) VALUES (17, ?)')
+    .run('Bound and schedule failed face indexing retries');
+}
 const finalSchemaVersion = db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get().version;
 db.pragma(`user_version = ${finalSchemaVersion}`);
 db.exec('COMMIT');
@@ -888,7 +898,8 @@ function saveFaceIndex(videoId, fingerprint, modelVersion, result) {
       VALUES (?, ?, ?, 'done', ?, ?, NULL, CURRENT_TIMESTAMP)
       ON CONFLICT(video_id, model_version) DO UPDATE SET fingerprint = excluded.fingerprint,
         status = 'done', frames_processed = excluded.frames_processed,
-        faces_detected = excluded.faces_detected, error = NULL, indexed_at = CURRENT_TIMESTAMP`)
+        faces_detected = excluded.faces_detected, error = NULL, attempts = 0,
+        next_attempt_at = NULL, indexed_at = CURRENT_TIMESTAMP`)
       .run(videoId, modelVersion, fingerprint, result.frames_processed, result.faces.length);
     db.prepare(`DELETE FROM face_observations WHERE video_id = ? AND fingerprint = ?
       AND model_version = ? AND review_status NOT IN ('confirmed', 'rejected')`)
@@ -909,13 +920,22 @@ function saveFaceIndex(videoId, fingerprint, modelVersion, result) {
   return save.immediate();
 }
 
-function markFaceIndexFailed(videoId, fingerprint, modelVersion, error) {
+function markFaceIndexFailed(videoId, fingerprint, modelVersion, error, maxAttempts = 5) {
   db.prepare(`INSERT INTO face_video_indexes
-      (video_id, model_version, fingerprint, status, error, indexed_at)
-    VALUES (?, ?, ?, 'failed', ?, CURRENT_TIMESTAMP)
+      (video_id, model_version, fingerprint, status, error, attempts, next_attempt_at, indexed_at)
+    VALUES (?, ?, ?, 'failed', ?, 1,
+      CASE WHEN ? <= 1 THEN NULL ELSE datetime(CURRENT_TIMESTAMP, '+15 minutes') END, CURRENT_TIMESTAMP)
     ON CONFLICT(video_id, model_version) DO UPDATE SET fingerprint = excluded.fingerprint,
-      status = 'failed', error = excluded.error, indexed_at = CURRENT_TIMESTAMP`)
-    .run(videoId, modelVersion, fingerprint, String(error).slice(0, 500));
+      status = 'failed', error = excluded.error,
+      attempts = CASE WHEN face_video_indexes.fingerprint = excluded.fingerprint
+        THEN face_video_indexes.attempts + 1 ELSE 1 END,
+      next_attempt_at = CASE WHEN face_video_indexes.fingerprint = excluded.fingerprint
+        AND face_video_indexes.attempts + 1 >= ? THEN NULL
+        ELSE datetime(CURRENT_TIMESTAMP, '+' || MIN(1440, 15 * (1 << MIN(
+          CASE WHEN face_video_indexes.fingerprint = excluded.fingerprint
+            THEN face_video_indexes.attempts ELSE 0 END, 7))) || ' minutes') END,
+      indexed_at = CURRENT_TIMESTAMP`)
+    .run(videoId, modelVersion, fingerprint, String(error).slice(0, 500), maxAttempts, maxAttempts);
 }
 
 function migrateFaceIndexVersion({ currentVersion, modelVersion, sampleIntervalSeconds,
@@ -947,11 +967,18 @@ function migrateFaceIndexVersion({ currentVersion, modelVersion, sampleIntervalS
 }
 
 function faceProgress(modelVersion, modelLabel = modelVersion) {
+  const maxAttempts = require('./config').faceConfiguration().max_retry_attempts;
   const videos = db.prepare(`SELECT COUNT(*) AS total,
       SUM(CASE WHEN fi.status = 'done' AND fi.fingerprint = v.fingerprint THEN 1 ELSE 0 END) AS indexed,
       SUM(CASE WHEN fi.status = 'failed' AND fi.fingerprint = v.fingerprint THEN 1 ELSE 0 END) AS failed
     FROM videos v LEFT JOIN face_video_indexes fi ON fi.video_id = v.id AND fi.model_version = ?
     WHERE v.status = 'done'`).get(modelVersion);
+  const retries = db.prepare(`SELECT
+      SUM(CASE WHEN fi.status = 'failed' AND fi.next_attempt_at > CURRENT_TIMESTAMP THEN 1 ELSE 0 END) AS waiting,
+      SUM(CASE WHEN fi.status = 'failed' AND fi.next_attempt_at IS NULL AND fi.attempts >= ? THEN 1 ELSE 0 END) AS exhausted,
+      MIN(CASE WHEN fi.status = 'failed' AND fi.next_attempt_at > CURRENT_TIMESTAMP THEN fi.next_attempt_at END) AS next_at
+    FROM face_video_indexes fi JOIN videos v ON v.id = fi.video_id
+    WHERE fi.model_version = ? AND fi.fingerprint = v.fingerprint AND v.status = 'done'`).get(maxAttempts, modelVersion);
   const faces = db.prepare(`SELECT COUNT(*) AS total,
       SUM(CASE WHEN f.review_status = 'unassigned' THEN 1 ELSE 0 END) AS unassigned,
       SUM(CASE WHEN f.review_status = 'confirmed' THEN 1 ELSE 0 END) AS confirmed,
@@ -961,6 +988,7 @@ function faceProgress(modelVersion, modelLabel = modelVersion) {
     WHERE f.model_version = ? AND f.fingerprint = v.fingerprint AND v.status IN ('done', 'failed')`).get(modelVersion);
   return { model: modelLabel, ...videos, indexed: videos.indexed || 0, failed: videos.failed || 0,
     remaining: Math.max(0, videos.total - (videos.indexed || 0)),
+    retry: { waiting: retries.waiting || 0, exhausted: retries.exhausted || 0, next_at: retries.next_at },
     faces: { total: faces.total || 0, unassigned: faces.unassigned || 0,
       confirmed: faces.confirmed || 0, automatic: faces.automatic || 0, ignored: faces.ignored || 0 } };
 }
@@ -1061,7 +1089,8 @@ function autoAssignFaceObservations({ modelVersion, threshold, limit = 1000 }) {
     const confirmed = db.prepare(`SELECT f.id, f.dimensions, f.vector, f.person_id, p.name AS person_name
       FROM face_observations f JOIN videos v ON v.id = f.video_id
       JOIN people p ON p.id = f.person_id
-      WHERE f.model_version = ? AND f.review_status = 'confirmed' AND p.merged_into IS NULL
+      WHERE f.model_version = ? AND f.review_status = 'confirmed'
+        AND f.assignment_source = 'manual' AND p.merged_into IS NULL
         AND f.fingerprint = v.fingerprint AND v.status IN ('done', 'failed')`).all(modelVersion);
     if (!confirmed.length) return { assigned: 0, considered: references.length };
 

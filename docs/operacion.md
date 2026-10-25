@@ -2,6 +2,19 @@
 
 [Volver al README](../README.md)
 
+## Despliegue del flujo de cuatro etapas (25/10/2026)
+
+Desde la raíz del repositorio, ejecutar `sudo bash scripts/deploy-processing-units.sh`.
+Instala y habilita los timers de inventario, visual, rostros y redacción; recarga
+systemd y reinicia el streamer para aplicar la migración SQLite y la interfaz.
+El inventario intenta 100 videos por lote cada hora. Los cuatro trabajadores
+usan bloqueos separados por etapa y comprueban fingerprint antes de guardar.
+El facial reserva dos lugares de cada lote para errores vencidos, con hasta cinco
+intentos y espera creciente. La asignación automática usa como referencias solo
+rostros confirmados manualmente. El visual reserva un lugar por lote para errores
+vencidos cuando hay fichas nuevas. La redacción requiere `OPENROUTER_API_KEY`
+en `/etc/pcloud-video-visual.env`.
+
 ## Estado observado el 21 de octubre de 2026
 
 Fotografía de la API y systemd tomada durante esta revisión; no representa un estado permanente.

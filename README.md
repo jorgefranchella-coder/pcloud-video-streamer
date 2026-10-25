@@ -74,9 +74,12 @@ public/app.js                    Navegación, progreso, fichas, búsqueda y revi
 pcloud-video-streamer.service    Servidor HTTP
 pcloud-video-indexer.service     Lote técnico
 pcloud-video-indexer.timer       Ejecución técnica periódica
-pcloud-video-visual.service      Lote visual manual
+pcloud-video-visual.service      Lote visual periódico y manual
+pcloud-video-visual.timer        Procesamiento visual periódico
 pcloud-video-face-indexer.service Indexación facial local
 pcloud-video-face-indexer.timer   Procesamiento facial periódico optativo
+pcloud-video-refinement.service   Propuestas de título y descripción
+pcloud-video-refinement.timer     Redacción periódica
 rclone-pcloud.service            Montaje remoto
 Dockerfile                      Imagen con Node y ffmpeg
 package.json / package-lock.json Dependencias y scripts npm

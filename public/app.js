@@ -239,6 +239,7 @@ async function apiFetch(url, options = {}) {
 }
 
 let progressRequestInFlight = false;
+let latestProcessStatus = null;
 
 async function loadProcessProgress() {
   if (progressRequestInFlight) return;
@@ -263,6 +264,7 @@ async function loadProcessProgress() {
 }
 
 function renderProcessProgress(status) {
+  latestProcessStatus = status;
   const technical = status.counts || {};
   const visual = status.visual_ready_counts || status.visual_counts || {};
   const count = value => Number.isFinite(Number(value)) ? Number(value) : 0;
@@ -310,7 +312,7 @@ function renderProcessProgress(status) {
   const faceFailures = count(faceProgress.failed)
     ? ` · ${format(faceProgress.failed)} con error${faceRetryEnabled ? ' · reintentos habilitados' : ' · reintentos desactivados'}`
     : '';
-  faceProgressDetail.textContent = `${format(faceProgress.remaining)} videos pendientes${faceFailures} · ${format(faceProgress.faces?.unassigned)} rostros por revisar · ${format(faceProgress.faces?.automatic)} asignados automáticamente · ${format(faceProgress.faces?.ignored)} ignorados · ${faceProgress.model || 'modelo local no configurado'}`;
+  faceProgressDetail.textContent = `${format(faceProgress.remaining)} videos pendientes${faceFailures} · ${format(faceProgress.retry?.waiting)} esperando reintento · ${format(faceProgress.retry?.exhausted)} sin más reintentos · ${format(faceProgress.faces?.unassigned)} rostros por revisar · ${format(faceProgress.faces?.automatic)} asignados automáticamente · ${format(faceProgress.faces?.ignored)} ignorados · ${faceProgress.model || 'modelo local no configurado'}`;
   technicalProgressDetail.textContent = [
     `${format(technical.pending)} pendientes`,
     `${format(technical.failed)} con error`,
@@ -395,15 +397,22 @@ function renderProcessProgress(status) {
     automationControlStatus.textContent += ` Último cambio: ${control.changed_by}, ${control.changed_at}.`;
   }
   manualProcessControls.classList.toggle('hidden', !status.can_control_automation);
-  const workerBusy = ['indexer', 'visual-analyzer', 'face-embedding-indexer', 'refinement-writer']
-    .some(name => status.worker_activity?.[name]?.active);
-  const manualRun = (status.manual_process_runs || []).find(item => ['starting', 'running'].includes(item.status));
+  const selectedWorkers = manualProcessSelect.value === 'pipeline'
+    ? ['indexer', 'visual-analyzer']
+    : [{ technical: 'indexer', visual: 'visual-analyzer', faces: 'face-embedding-indexer', refinement: 'refinement-writer' }[manualProcessSelect.value]];
+  const workerBusy = selectedWorkers.some(name => status.worker_activity?.[name]?.active);
+  const manualRun = (status.manual_process_runs || []).find(item => {
+    if (!['starting', 'running'].includes(item.status)) return false;
+    const runningWorkers = item.process === 'pipeline' ? ['indexer', 'visual-analyzer']
+      : [{ technical: 'indexer', visual: 'visual-analyzer', faces: 'face-embedding-indexer', refinement: 'refinement-writer' }[item.process]];
+    return selectedWorkers.some(name => runningWorkers.includes(name));
+  });
   const manualBusy = Boolean(manualRun);
-  manualProcessSelect.disabled = !status.can_control_automation || manualBusy || manualProcessRequestInFlight;
+  manualProcessSelect.disabled = !status.can_control_automation || manualProcessRequestInFlight;
   manualProcessBtn.disabled = !status.can_control_automation || Boolean(control.paused) || workerBusy || manualBusy || manualProcessRequestInFlight;
   if (manualRun) manualProcessStatus.textContent = `${manualRun.label} en curso${manualRun.pid ? ` · proceso ${manualRun.pid}` : ''}.`;
   else if (control.paused) manualProcessStatus.textContent = 'Reanudá el procesamiento para iniciar una tarea.';
-  else if (workerBusy) manualProcessStatus.textContent = 'Hay otro proceso en curso. Elegí cuál iniciar cuando termine.';
+  else if (workerBusy) manualProcessStatus.textContent = 'Esta etapa ya está en curso. Podés elegir otra.';
   else if (!manualProcessRequestInFlight) {
     const recentManualRun = (status.manual_process_runs || []).at(-1);
     if (recentManualRun) manualProcessStatus.textContent = recentManualRun.status === 'done'
@@ -504,6 +513,9 @@ function renderProcessProgress(status) {
 function setupEventListeners() {
   automationControlBtn.addEventListener('click', changeAutomationControl);
   manualProcessBtn.addEventListener('click', startManualProcess);
+  manualProcessSelect.addEventListener('change', () => {
+    if (latestProcessStatus) renderProcessProgress(latestProcessStatus);
+  });
   // Refresh button
   refreshBtn.addEventListener('click', updateSearch);
   peopleDirectoryBtn.addEventListener('click', openPeopleDirectory);

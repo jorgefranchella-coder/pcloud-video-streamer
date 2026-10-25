@@ -101,17 +101,34 @@ async function run() {
       max_frames_per_video: CONFIG.max_frames_per_video, max_dimension: CONFIG.max_dimension,
       min_face_size: CONFIG.min_face_size, detection_threshold: CONFIG.detection_threshold,
       suggestion_threshold: CONFIG.suggestion_threshold,
-      auto_assignment_threshold: CONFIG.auto_assignment_threshold
+      auto_assignment_threshold: CONFIG.auto_assignment_threshold,
+      retry_failed: CONFIG.retry_failed, max_retry_attempts: CONFIG.max_retry_attempts,
+      retry_slots: CONFIG.retry_slots
     });
     const candidates = db.prepare(`SELECT v.id, v.relative_path, v.fingerprint, v.duration_ms,
-        fi.status AS face_status, fi.fingerprint AS face_fingerprint
+        fi.status AS face_status, fi.fingerprint AS face_fingerprint,
+        fi.attempts AS face_attempts, fi.next_attempt_at AS face_next_attempt_at
       FROM videos v LEFT JOIN face_video_indexes fi
         ON fi.video_id = v.id AND fi.model_version = ?
       WHERE v.status = 'done' AND (? IS NULL OR v.id = ?)
         AND (fi.video_id IS NULL OR fi.fingerprint != v.fingerprint
-          OR (? = 1 AND fi.status = 'failed' AND fi.fingerprint = v.fingerprint))
-      ORDER BY v.id`).all(CONFIG.index_version, CONFIG.video_id, CONFIG.video_id, CONFIG.retry_failed ? 1 : 0);
-    const batch = candidates.slice(0, CONFIG.max_videos);
+          OR (? = 1 AND fi.status = 'failed' AND fi.fingerprint = v.fingerprint
+            AND fi.attempts < ? AND (fi.next_attempt_at IS NULL OR fi.next_attempt_at <= CURRENT_TIMESTAMP))
+          OR (? IS NOT NULL AND v.id = ? AND fi.status = 'failed'))
+      ORDER BY v.id`).all(CONFIG.index_version, CONFIG.video_id, CONFIG.video_id,
+        CONFIG.retry_failed ? 1 : 0, CONFIG.max_retry_attempts, CONFIG.video_id, CONFIG.video_id);
+    const fresh = candidates.filter(row => row.face_status !== 'failed' || row.face_fingerprint !== row.fingerprint);
+    const retries = candidates.filter(row => row.face_status === 'failed' && row.face_fingerprint === row.fingerprint)
+      .sort((a, b) => a.face_next_attempt_at?.localeCompare(b.face_next_attempt_at || '') || a.id - b.id);
+    const retryQuota = fresh.length ? Math.min(CONFIG.retry_slots, CONFIG.max_videos) : CONFIG.max_videos;
+    const batch = [...fresh.slice(0, CONFIG.max_videos - retryQuota), ...retries.slice(0, retryQuota)];
+    if (batch.length < CONFIG.max_videos) {
+      batch.push(...fresh.slice(CONFIG.max_videos - retryQuota,
+        CONFIG.max_videos - retryQuota + CONFIG.max_videos - batch.length));
+    }
+    if (batch.length < CONFIG.max_videos) {
+      batch.push(...retries.slice(retryQuota, retryQuota + CONFIG.max_videos - batch.length));
+    }
     let indexed = 0;
     let failed = 0;
     setWorkerActivity(WORKER, { phase: 'preparando lote', result: `Lote local: ${batch.length} videos pendientes` });
@@ -127,12 +144,13 @@ async function run() {
         });
       } catch (error) {
         failed += 1;
-        markFaceIndexFailed(row.id, row.fingerprint, CONFIG.index_version, error.message);
+        const reason = String(error.stderr || '').trim().slice(0, 420) || String(error.message).slice(-420);
+        markFaceIndexFailed(row.id, row.fingerprint, CONFIG.index_version, reason, CONFIG.max_retry_attempts);
         setWorkerActivity(WORKER, {
           phase: 'error procesando video', videoId: row.id, path: row.relative_path,
-          error: error.message, result: null
+          error: reason, result: null
         });
-        console.error(`Local face indexing failed for video ${row.id}: ${error.message}`);
+        console.error(`Local face indexing failed for video ${row.id}: ${reason}`);
       }
     }
     const autoAssignment = autoAssignFaceObservations({

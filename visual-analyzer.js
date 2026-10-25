@@ -633,16 +633,28 @@ async function runLocked() {
     return;
   }
   const batchLimit = Math.min(MAX_VISUAL, dailyRemaining);
-  const candidates = Number.isInteger(TARGET_ID) && TARGET_ID > 0
-    ? db.prepare("SELECT id, relative_path, fingerprint, duration_ms, confirmed_people_json FROM videos WHERE id = ? AND status = 'done'").all(TARGET_ID)
-    : db.prepare(`SELECT id, relative_path, fingerprint, duration_ms, confirmed_people_json FROM videos
-        WHERE status = 'done' AND (visual_status IS NULL OR visual_status = 'pending'
-          OR (visual_status = 'failed' AND ? = 1 AND visual_next_attempt_at IS NOT NULL
-            AND visual_next_attempt_at <= CURRENT_TIMESTAMP AND visual_attempts < ?))
-        ORDER BY CASE WHEN visual_status = 'failed' THEN 0 ELSE 1 END,
-          COALESCE(visual_next_attempt_at, '9999-12-31 23:59:59'), id LIMIT ?`)
-      .all(RETRY_FAILED ? 1 : 0, MAX_VISUAL_ATTEMPTS, batchLimit);
+  let candidates;
+  if (Number.isInteger(TARGET_ID) && TARGET_ID > 0) {
+    candidates = db.prepare("SELECT id, relative_path, fingerprint, duration_ms, confirmed_people_json FROM videos WHERE id = ? AND status = 'done'").all(TARGET_ID);
+  } else {
+    const fresh = db.prepare(`SELECT id, relative_path, fingerprint, duration_ms, confirmed_people_json FROM videos
+      WHERE status = 'done' AND (visual_status IS NULL OR visual_status = 'pending')
+      ORDER BY id LIMIT ?`).all(batchLimit);
+    const retries = RETRY_FAILED ? db.prepare(`SELECT id, relative_path, fingerprint, duration_ms, confirmed_people_json FROM videos
+      WHERE status = 'done' AND visual_status = 'failed' AND visual_next_attempt_at IS NOT NULL
+        AND visual_next_attempt_at <= CURRENT_TIMESTAMP AND visual_attempts < ?
+      ORDER BY visual_next_attempt_at, id LIMIT ?`).all(MAX_VISUAL_ATTEMPTS, batchLimit) : [];
+    const retryQuota = fresh.length ? Math.min(1, batchLimit) : batchLimit;
+    candidates = [...fresh.slice(0, batchLimit - retryQuota), ...retries.slice(0, retryQuota)];
+    if (candidates.length < batchLimit) {
+      candidates.push(...fresh.slice(batchLimit - retryQuota, batchLimit - retryQuota + batchLimit - candidates.length));
+    }
+    if (candidates.length < batchLimit) candidates.push(...retries.slice(retryQuota, retryQuota + batchLimit - candidates.length));
+  }
   let attempted = 0;
+  let completed = 0;
+  let failed = 0;
+  let stoppedEarly = false;
   for (const row of candidates) {
     if (getAutomationControl().paused) {
       setWorkerActivity('visual-analyzer', { phase: 'pausado', result: 'El lote actual terminó antes de tomar el siguiente video' });
@@ -660,9 +672,18 @@ async function runLocked() {
       break;
     }
     attempted++;
-    if (!await analyzeVideo(row, apiKey)) break;
+    const shouldContinue = await analyzeVideo(row, apiKey);
+    const outcome = db.prepare('SELECT visual_status FROM videos WHERE id = ?').get(row.id)?.visual_status;
+    if (outcome === 'done') completed++;
+    else if (outcome === 'failed') failed++;
+    if (!shouldContinue) {
+      stoppedEarly = true;
+      break;
+    }
   }
-  console.log(`Visual batch: ${attempted} video(s) attempted`);
+  const summary = `Lote visual: ${completed} fichas guardadas, ${failed} errores, ${attempted} videos intentados`;
+  if (attempted && !stoppedEarly) setWorkerActivity('visual-analyzer', { phase: null, result: summary });
+  console.log(summary);
 }
 
 function run() {

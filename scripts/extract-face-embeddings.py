@@ -21,7 +21,7 @@ def extract_frame(video_path, at_seconds, max_dimension):
         ],
         check=True,
         stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
         timeout=60,
     )
     if not result.stdout or len(result.stdout) > 8 * 1024 * 1024:
@@ -53,9 +53,21 @@ def main():
     recognizer = cv2.FaceRecognizerSF_create(args.sface, "")
     faces = []
     frames_processed = 0
+    frames_failed = 0
+    last_frame_error = ""
     for at_seconds in times:
-        frame = extract_frame(args.video, at_seconds, args.max_dimension)
+        try:
+            frame = extract_frame(args.video, at_seconds, args.max_dimension)
+        except subprocess.CalledProcessError as error:
+            frames_failed += 1
+            last_frame_error = error.stderr.decode("utf-8", errors="replace")[-300:].strip()
+            continue
+        except subprocess.TimeoutExpired:
+            frames_failed += 1
+            last_frame_error = "FFmpeg agotó el tiempo de espera de 60 segundos"
+            continue
         if frame is None:
+            frames_failed += 1
             continue
         frames_processed += 1
         frame_height, frame_width = frame.shape[:2]
@@ -88,6 +100,9 @@ def main():
                 "vector": base64.b64encode(vector.tobytes()).decode("ascii"),
             })
             face_index += 1
+
+    if frames_processed == 0:
+        raise RuntimeError(f"No se pudo extraer ningún fotograma ({frames_failed} fallidos): {last_frame_error}")
 
     json.dump({"frames_processed": frames_processed, "faces": faces}, sys.stdout, separators=(",", ":"))
     sys.stdout.write("\n")

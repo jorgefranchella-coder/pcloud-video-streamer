@@ -44,7 +44,9 @@ El proyecto no carga archivos `.env` automáticamente. Para una ejecución manua
 | `FACE_AUTO_ASSIGNMENT_THRESHOLD` | `0.75` | Similitud mínima inclusiva para asignar el rostro a la identidad con mejor coincidencia; queda registrada como automática, entre 0 y 1 y debe ser mayor que el umbral de sugerencias |
 | `FACE_AUTO_ASSIGNMENT_BATCH_SIZE` | `1000` | Rostros pendientes que se comparan por ejecución del indexador automático, entre 1 y 10000 |
 | `FACE_RETRY_FAILED` | `1` | Si vale `1`, vuelve a procesar videos con error |
-| `FACE_VIDEO_ID` | Sin definir | ID opcional para procesar un video específico |
+| `FACE_MAX_RETRY_ATTEMPTS` | `5` | Máximo de intentos por video y versión de archivo; después requiere intervención manual o un nuevo fingerprint |
+| `FACE_RETRY_SLOTS` | `2` | Cupos por lote reservados a reintentos vencidos cuando también hay videos nuevos |
+| `FACE_VIDEO_ID` | Sin definir | ID opcional para procesar un video específico; fuerza un reintento incluso después de agotar el límite |
 | `OPENROUTER_API_URL` | `https://openrouter.ai/api/v1/chat/completions` | Visual; endpoint de inferencia, exige HTTPS y no sigue redirecciones |
 | `MAX_VISUAL` | `1` | Visual; lote entre 1 y 100; `0` no significa ilimitado |
 | `MAX_VISUAL_FRAMES` | `4` | Visual; máximo de fotogramas por ficha, entre 1 y 8; se ajusta por duración |
@@ -158,7 +160,7 @@ sudo systemctl start pcloud-video-refinement.service
 sudo systemctl restart pcloud-video-streamer.service
 ```
 
-Consultar `journalctl -u pcloud-video-refinement.service -n 50 --no-pager`. Los errores tienen hasta tres intentos con espera; desde la ficha se puede reiniciar un caso agotado. El proceso respeta la pausa global y el bloqueo común con los otros indexadores. Los perfiles de personas se guardan localmente y los cambios vuelven obsoletas las propuestas anteriores; el próximo lote generará otra.
+Consultar `journalctl -u pcloud-video-refinement.service -n 50 --no-pager`. Los errores tienen hasta tres intentos con espera; desde la ficha se puede reiniciar un caso agotado. El proceso respeta la pausa global y usa un bloqueo propio de etapa. Los perfiles de personas se guardan localmente y los cambios vuelven obsoletas las propuestas anteriores; el próximo lote generará otra.
 
 Para restringir la biblioteca a personas con token, crear `/etc/pcloud-video-access.env`:
 
@@ -207,7 +209,7 @@ sudo systemctl enable --now pcloud-video-visual.timer
 systemctl list-timers pcloud-video-visual.timer
 ```
 
-El timer no se habilita en la instalación inicial. Cada ejecución respeta `MAX_VISUAL`, el límite diario, los reintentos y el bloqueo común. Si se alcanza el límite diario, las fichas siguen pendientes; systemd las intentará en su siguiente intervalo, una vez renovado el contador UTC.
+Cada ejecución respeta `MAX_VISUAL`, el límite diario, los reintentos y el bloqueo de la etapa visual. Si se alcanza el límite diario, las fichas siguen pendientes; systemd las intentará en su siguiente intervalo, una vez renovado el contador UTC. El script `scripts/deploy-processing-units.sh` instala y habilita los cuatro timers.
 
 ### Reconocimiento facial local
 

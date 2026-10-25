@@ -11,6 +11,7 @@ Group=jorge
 WorkingDirectory=/home/jorge/orca/workspaces/Video-Home/meta-data-videos
 Environment="VIDEO_ROOT=/mnt/pcloud/My Videos"
 Environment="DATA_DIR=/home/jorge/orca/workspaces/Video-Home/meta-data-videos/data"
+Environment=MAX_PROBES=100
 ExecStart=/home/jorge/.hermes/node/bin/node indexer.js
 StandardOutput=journal
 StandardError=journal

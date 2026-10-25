@@ -3,7 +3,7 @@ Description=Periodic pCloud video metadata scan
 
 [Timer]
 OnBootSec=5min
-OnUnitInactiveSec=6h
+OnUnitInactiveSec=1h
 Persistent=true
 Unit=pcloud-video-indexer.service
 

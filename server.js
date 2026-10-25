@@ -314,6 +314,7 @@ function manualProcessEnvironment(processName) {
     delete env.OPENROUTER_API_URL;
     delete env.OPENROUTER_MODEL;
   }
+  if (processName === 'technical' || processName === 'pipeline') env.MAX_PROBES ||= '100';
   if (processName === 'visual' || processName === 'pipeline') {
     env.MAX_VISUAL ||= '5';
     env.RETRY_VISUAL_FAILED ||= '1';
@@ -353,17 +354,24 @@ app.post('/api/index/run', (req, res) => {
       (!providerControl.paused_until || new Date(`${providerControl.paused_until.replace(' ', 'T')}Z`).getTime() > Date.now())) {
     return res.status(409).json({ error: `El proveedor visual está pausado: ${providerControl.reason}` });
   }
-  if ([...manualProcessRuns.values()].some(run => ['starting', 'running'].includes(run.status))) {
-    return res.status(409).json({ error: 'Ya hay una ejecución manual iniciada.' });
+  const requestedWorkers = processName === 'pipeline' ? ['indexer', 'visual-analyzer'] : [definition.worker];
+  if ([...manualProcessRuns.values()].some(run => {
+    if (!['starting', 'running'].includes(run.status)) return false;
+    const runningWorkers = run.process === 'pipeline' ? ['indexer', 'visual-analyzer']
+      : [manualProcessDefinitions[run.process]?.worker];
+    return requestedWorkers.some(worker => runningWorkers.includes(worker));
+  })) {
+    return res.status(409).json({ error: 'Ya hay una ejecución de esa etapa iniciada.' });
   }
-  const lock = metadata.db.prepare('SELECT owner_pid, owner_host FROM process_locks WHERE name = ?').get('video-library-pipeline');
-  if (lock) {
+  const locks = metadata.db.prepare(`SELECT name, owner_pid, owner_host FROM process_locks
+    WHERE name IN (${requestedWorkers.map(() => '?').join(',')})`).all(...requestedWorkers);
+  for (const lock of locks) {
     let ownerAlive = true;
     if (lock.owner_host === os.hostname()) {
       try { process.kill(lock.owner_pid, 0); }
       catch (error) { ownerAlive = error.code !== 'ESRCH'; }
     }
-    if (ownerAlive) return res.status(409).json({ error: 'Otro proceso está trabajando en la biblioteca. Esperá a que termine y volvé a intentar.' });
+    if (ownerAlive) return res.status(409).json({ error: 'Esa etapa ya está trabajando. Esperá a que termine y volvé a intentar.' });
   }
 
   const runId = crypto.randomUUID();
