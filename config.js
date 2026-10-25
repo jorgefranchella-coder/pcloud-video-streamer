@@ -93,7 +93,7 @@ function faceConfiguration() {
     suggestion_threshold: suggestionThreshold,
     auto_assignment_threshold: autoAssignmentThreshold,
     auto_assignment_batch_size: integerSetting('FACE_AUTO_ASSIGNMENT_BATCH_SIZE', 1000, 1, 10000),
-    retry_failed: booleanSetting('FACE_RETRY_FAILED'),
+    retry_failed: process.env.FACE_RETRY_FAILED === undefined ? true : booleanSetting('FACE_RETRY_FAILED'),
     video_id: process.env.FACE_VIDEO_ID === undefined || process.env.FACE_VIDEO_ID === ''
       ? null : integerSetting('FACE_VIDEO_ID', 0, 1, Number.MAX_SAFE_INTEGER)
   };

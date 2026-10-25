@@ -43,7 +43,7 @@ El proyecto no carga archivos `.env` automáticamente. Para una ejecución manua
 | `FACE_SUGGESTION_THRESHOLD` | `0.5` | Similitud coseno mínima para mostrar identidades sugeridas; no asigna nombres automáticamente, entre 0 y 1 |
 | `FACE_AUTO_ASSIGNMENT_THRESHOLD` | `0.75` | Similitud mínima inclusiva para asignar el rostro a la identidad con mejor coincidencia; queda registrada como automática, entre 0 y 1 y debe ser mayor que el umbral de sugerencias |
 | `FACE_AUTO_ASSIGNMENT_BATCH_SIZE` | `1000` | Rostros pendientes que se comparan por ejecución del indexador automático, entre 1 y 10000 |
-| `FACE_RETRY_FAILED` | `0` | Si vale `1`, vuelve a procesar videos con error |
+| `FACE_RETRY_FAILED` | `1` | Si vale `1`, vuelve a procesar videos con error |
 | `FACE_VIDEO_ID` | Sin definir | ID opcional para procesar un video específico |
 | `OPENROUTER_API_URL` | `https://openrouter.ai/api/v1/chat/completions` | Visual; endpoint de inferencia, exige HTTPS y no sigue redirecciones |
 | `MAX_VISUAL` | `1` | Visual; lote entre 1 y 100; `0` no significa ilimitado |

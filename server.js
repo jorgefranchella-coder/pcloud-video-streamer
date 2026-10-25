@@ -328,7 +328,7 @@ function manualProcessEnvironment(processName) {
     env.FACE_MAX_DIMENSION ||= '960';
     env.FACE_MIN_FACE_SIZE ||= '48';
     env.FACE_DETECTION_THRESHOLD ||= '0.75';
-    env.FACE_RETRY_FAILED ||= '0';
+    env.FACE_RETRY_FAILED ||= '1';
   }
   if (processName === 'refinement') {
     env.MAX_REFINEMENTS ||= '5';
