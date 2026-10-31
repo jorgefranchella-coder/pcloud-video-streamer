@@ -27,7 +27,7 @@ El proyecto no carga archivos `.env` automáticamente. Para una ejecución manua
 | `JELLYFIN_API_KEY` | Sin definir | Web; clave API de Jellyfin, solo se usa desde el servidor y nunca se entrega al navegador |
 | `JELLYFIN_USER_ID` | Sin definir | Web; usuario Jellyfin opcional; si falta, se detecta la primera cuenta administradora |
 | `INDEX_MODE` | Sin definir | Indexador; `inventory` evita ffprobe |
-| `PROBE_TIMEOUT_MS` | `30000` | Indexador; timeout por ffprobe |
+| `PROBE_TIMEOUT_MS` | `180000` | Indexador; tiempo máximo por ffprobe, incluido el acceso a pCloud |
 | `MAX_PROBES` | `50` | Indexador; intentos por recorrido; `0` sin límite |
 | `RETRY_FAILED` | Desactivado | Indexador; exactamente `1` reintenta fallos técnicos |
 | `OPENROUTER_API_KEY` | Sin definir | Visual; obligatoria |

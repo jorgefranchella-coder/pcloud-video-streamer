@@ -232,9 +232,12 @@ async function scanDirectory(relativeDir, scanId, counters) {
       counters.probed++;
     } catch (error) {
       counters.failed++;
+      const detail = error.killed
+        ? `ffprobe excedió el tiempo límite de ${PROBE_TIMEOUT_MS} ms (señal ${error.signal || 'desconocida'})`
+        : String(error.stderr || error.message).trim();
       db.prepare(`UPDATE videos SET status = 'failed', error = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE relative_path = ?`).run(String(error.message).slice(0, 1000), relativePath.split(path.sep).join('/'));
-      console.error(`Failed: ${relativePath}: ${error.message}`);
+        WHERE relative_path = ?`).run(detail.slice(0, 1000), relativePath.split(path.sep).join('/'));
+      console.error(`Failed: ${relativePath}: ${detail}`);
     }
   }
 }

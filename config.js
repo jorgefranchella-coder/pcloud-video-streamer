@@ -37,7 +37,7 @@ function indexerConfiguration() {
     throw new Error('INDEX_MODE must be inventory or unset');
   }
   return {
-    probe_timeout_ms: integerSetting('PROBE_TIMEOUT_MS', 30000, 1000, 600000),
+    probe_timeout_ms: integerSetting('PROBE_TIMEOUT_MS', 180000, 1000, 600000),
     max_probes: integerSetting('MAX_PROBES', 50, 0, 1000000),
     retry_failed: booleanSetting('RETRY_FAILED'),
     inventory_only: mode === 'inventory'
