@@ -2,6 +2,19 @@
 
 [Volver al README](../README.md)
 
+## Despliegue del flujo de cuatro etapas (25/10/2026)
+
+Desde la raíz del repositorio, ejecutar `sudo bash scripts/deploy-processing-units.sh`.
+Instala y habilita los timers de inventario, visual, rostros y redacción; recarga
+systemd y reinicia el streamer para aplicar la migración SQLite y la interfaz.
+El inventario intenta 100 videos por lote cada hora. Los cuatro trabajadores
+usan bloqueos separados por etapa y comprueban fingerprint antes de guardar.
+El facial reserva dos lugares de cada lote para errores vencidos, con hasta cinco
+intentos y espera creciente. La asignación automática usa como referencias solo
+rostros confirmados manualmente. El visual reserva un lugar por lote para errores
+vencidos cuando hay fichas nuevas. La redacción requiere `OPENROUTER_API_KEY`
+en `/etc/pcloud-video-visual.env`.
+
 ## Estado observado el 21 de octubre de 2026
 
 Fotografía de la API y systemd tomada durante esta revisión; no representa un estado permanente.
@@ -114,7 +127,7 @@ Esta ejecución no cambia el estado de la unidad systemd. El analizador visual t
 | Pausa de proveedor visible | `/api/index/status` incluye `visual_provider_control`; los fallos de cuota o red esperan hasta el horario indicado, y los errores de configuración requieren cambiar clave/modelo/endpoint |
 | Pausar nuevos lotes | Con `METADATA_EDIT_TOKEN` configurado, usar el control de pausa de la sección de progreso. El trabajo técnico en curso y la solicitud visual actual terminan; no se inician etapas nuevas ni otro video visual hasta reanudar |
 | Presupuesto diario visual agotado | Revisar `visual_daily_budget` en `/api/index/status`; las fichas restantes siguen pendientes. El contador usa UTC y se renueva a las 00:00 UTC; iniciar otro lote después de ese momento |
-| JSON inválido o esquema incompatible | Revisar `visual_error`; el proveedor debe aceptar imágenes y salida estructurada. Reintentar de forma acotada o revisar el modelo |
+| JSON inválido o respuesta vacía | El analizador extrae JSON de respuestas envueltas en texto y, si no alcanza, hace un reanálisis compacto único. Revisar `visual_error` y los registros JSON del worker para ver proveedor, ID, `finish_reason`, uso y tamaño de salida; la ficha sigue el reintento exponencial existente |
 | `ffprobe` o `ffmpeg` lento | Ver montaje, caché y archivo actual. Un timeout de proceso no garantiza respuesta inmediata de una lectura FUSE bloqueada |
 | Contador recorrido en cero | Se persiste cada 100 archivos; contrastar crecimiento de fichas y proceso activo |
 | `running` tras un cierre abrupto | La interfaz marca `stale` cuando el PID del mismo host ya no existe. El indexador reconcilia recorridos abandonados al iniciar; el analizador visual programa el video interrumpido para reintento diferido. No borrar el bloqueo mientras su proceso siga vivo |

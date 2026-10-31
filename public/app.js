@@ -44,10 +44,22 @@ const metadataMapLink = document.getElementById('metadataMapLink');
 const metadataCaptureDevice = document.getElementById('metadataCaptureDevice');
 const exportMetadataBtn = document.getElementById('exportMetadataBtn');
 const importMetadataBtn = document.getElementById('importMetadataBtn');
+const syncJellyfinBtn = document.getElementById('syncJellyfinBtn');
 const metadataExportStatus = document.getElementById('metadataExportStatus');
 const visualMetadata = document.getElementById('visualMetadata');
 const visualTitle = document.getElementById('visualTitle');
 const visualSummary = document.getElementById('visualSummary');
+const refinementPanel = document.getElementById('refinementPanel');
+const refinementStatus = document.getElementById('refinementStatus');
+const retryRefinementBtn = document.getElementById('retryRefinementBtn');
+const refinementProposal = document.getElementById('refinementProposal');
+const refinementTitle = document.getElementById('refinementTitle');
+const refinementSummary = document.getElementById('refinementSummary');
+const approveRefinementBtn = document.getElementById('approveRefinementBtn');
+const rejectRefinementBtn = document.getElementById('rejectRefinementBtn');
+const originalVisualDetails = document.getElementById('originalVisualDetails');
+const originalVisualTitle = document.getElementById('originalVisualTitle');
+const originalVisualSummary = document.getElementById('originalVisualSummary');
 const visualUncertainty = document.getElementById('visualUncertainty');
 const visualPeople = document.getElementById('visualPeople');
 const visualEvents = document.getElementById('visualEvents');
@@ -59,15 +71,24 @@ const faceIdentityResults = document.getElementById('faceIdentityResults');
 const peopleDirectoryBtn = document.getElementById('peopleDirectoryBtn');
 const mobilePeopleDirectoryBtn = document.getElementById('mobilePeopleDirectoryBtn');
 const faceReviewBtn = document.getElementById('faceReviewBtn');
+const refinementReviewBtn = document.getElementById('refinementReviewBtn');
+const mobileRefinementReviewBtn = document.getElementById('mobileRefinementReviewBtn');
+const refinementReviewDialog = document.getElementById('refinementReviewDialog');
+const closeRefinementReview = document.getElementById('closeRefinementReview');
+const refinementQueueStatus = document.getElementById('refinementQueueStatus');
+const refinementQueue = document.getElementById('refinementQueue');
 const mobileFaceReviewBtn = document.getElementById('mobileFaceReviewBtn');
 const peopleDialog = document.getElementById('peopleDialog');
 const peopleDirectory = document.getElementById('peopleDirectory');
 const closePeopleDialog = document.getElementById('closePeopleDialog');
 const faceReviewDialog = document.getElementById('faceReviewDialog');
 const closeFaceReview = document.getElementById('closeFaceReview');
+const installAppBtn = document.getElementById('installAppBtn');
 const faceInboxStatus = document.getElementById('faceInboxStatus');
 const faceInboxGrid = document.getElementById('faceInboxGrid');
 const faceLoadMore = document.getElementById('faceLoadMore');
+const faceInboxPendingMode = document.getElementById('faceInboxPendingMode');
+const faceInboxAutomaticMode = document.getElementById('faceInboxAutomaticMode');
 const faceSelectedStatus = document.getElementById('faceSelectedStatus');
 const faceNeighborGrid = document.getElementById('faceNeighborGrid');
 const faceAssignmentControls = document.getElementById('faceAssignmentControls');
@@ -86,10 +107,17 @@ const visualProgressBar = document.getElementById('visualProgressBar');
 const faceProgressBar = document.getElementById('faceProgressBar');
 const faceProgressLabel = document.getElementById('faceProgressLabel');
 const faceProgressDetail = document.getElementById('faceProgressDetail');
+const refinementProgressBar = document.getElementById('refinementProgressBar');
+const refinementProgressLabel = document.getElementById('refinementProgressLabel');
+const refinementProgressDetail = document.getElementById('refinementProgressDetail');
 const scanProgressStatus = document.getElementById('scanProgressStatus');
 const effectiveConfiguration = document.getElementById('effectiveConfiguration');
 const automationControlBtn = document.getElementById('automationControlBtn');
 const automationControlStatus = document.getElementById('automationControlStatus');
+const manualProcessControls = document.getElementById('manualProcessControls');
+const manualProcessSelect = document.getElementById('manualProcessSelect');
+const manualProcessBtn = document.getElementById('manualProcessBtn');
+const manualProcessStatus = document.getElementById('manualProcessStatus');
 const manualRetryHistoryDetails = document.getElementById('visualRetryHistoryDetails');
 const manualRetryHistory = document.getElementById('visualRetryHistory');
 let selectedVideoPath = null;
@@ -98,12 +126,14 @@ let selectedMetadataRevision = null;
 let playbackRequestId = 0;
 let selectedPersonId = null;
 let editToken = null;
+let manualProcessRequestInFlight = false;
 let knownPeople = [];
 let knownPersonMerges = [];
 let canEditPeopleDirectory = false;
 let faceInboxItems = [];
 let faceInboxCursor = 0;
 let faceInboxTotal = 0;
+let faceInboxMode = 'pending';
 let selectedFaceForReview = null;
 let selectedFaceIds = new Set();
 let searchTimer;
@@ -112,12 +142,37 @@ let treeRequestId = 0;
 let accessRenewalPromise = null;
 let accessSessionRequired = false;
 const SEARCH_PAGE_SIZE = 50;
+let pendingInstallPrompt = null;
 
 // API Base URL
 const API_BASE = '';
 
+window.addEventListener('beforeinstallprompt', event => {
+  event.preventDefault();
+  pendingInstallPrompt = event;
+  installAppBtn.classList.remove('hidden');
+});
+
+window.addEventListener('appinstalled', () => {
+  pendingInstallPrompt = null;
+  installAppBtn.classList.add('hidden');
+});
+
+installAppBtn.addEventListener('click', async () => {
+  if (!pendingInstallPrompt) return;
+  pendingInstallPrompt.prompt();
+  await pendingInstallPrompt.userChoice;
+  pendingInstallPrompt = null;
+  installAppBtn.classList.add('hidden');
+});
+
 // Initialize
 document.addEventListener('DOMContentLoaded', async () => {
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/service-worker.js').catch(error => {
+      console.warn('No se pudo registrar el service worker:', error);
+    });
+  }
   if (!await establishAccessSession()) {
     if (!folderTree.textContent) {
       folderTree.textContent = 'Acceso requerido para consultar la biblioteca.';
@@ -132,7 +187,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadProcessProgress();
   window.setInterval(() => {
     if (document.visibilityState === 'visible') loadProcessProgress();
-  }, 15000);
+  }, 5000);
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') loadProcessProgress();
   });
@@ -184,24 +239,32 @@ async function apiFetch(url, options = {}) {
 }
 
 let progressRequestInFlight = false;
+let latestProcessStatus = null;
 
 async function loadProcessProgress() {
   if (progressRequestInFlight) return;
   progressRequestInFlight = true;
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 10000);
   try {
-    const response = await apiFetch(`${API_BASE}/api/index/status`);
+    const response = await apiFetch(`${API_BASE}/api/index/status`, {
+      cache: 'no-store', signal: controller.signal
+    });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     renderProcessProgress(await response.json());
   } catch (error) {
     progressUpdated.textContent = 'Estado no disponible';
-    technicalProgressDetail.textContent = `No se pudo cargar el estado (${error.message})`;
+    const reason = error.name === 'AbortError' ? 'la consulta tardó más de 10 segundos' : error.message;
+    technicalProgressDetail.textContent = `No se pudo cargar el estado (${reason})`;
     visualProgressDetail.textContent = 'Se volverá a intentar automáticamente.';
   } finally {
+    window.clearTimeout(timeout);
     progressRequestInFlight = false;
   }
 }
 
 function renderProcessProgress(status) {
+  latestProcessStatus = status;
   const technical = status.counts || {};
   const visual = status.visual_ready_counts || status.visual_counts || {};
   const count = value => Number.isFinite(Number(value)) ? Number(value) : 0;
@@ -230,11 +293,26 @@ function renderProcessProgress(status) {
   setProgress(visualProgressBar, visualProgressLabel, visualDone, totalVisual);
   const faceProgress = status.face_progress || { total: 0, indexed: 0, remaining: 0, failed: 0, faces: {} };
   setProgress(faceProgressBar, faceProgressLabel, faceProgress.indexed, faceProgress.total);
+  const refinementProgress = status.refinement_progress || { total: 0, proposed: 0, approved: 0, rejected: 0, pending: 0 };
+  const proposalsToReview = count(refinementProgress.proposed);
+  const reviewLabel = `Revisar fichas de videos · ${format(proposalsToReview)}`;
+  refinementReviewBtn.textContent = reviewLabel;
+  mobileRefinementReviewBtn.textContent = reviewLabel;
+  setProgress(refinementProgressBar, refinementProgressLabel,
+    count(refinementProgress.proposed) + count(refinementProgress.approved) + count(refinementProgress.rejected),
+    refinementProgress.total);
+  refinementProgressDetail.textContent = `${format(refinementProgress.pending)} pendientes · ${format(refinementProgress.proposed)} por revisar · ${format(refinementProgress.approved)} aprobadas · ${format(refinementProgress.failed)} con error · ${format(refinementProgress.daily_requests)} solicitudes hoy UTC`;
+  const refinementWorker = status.worker_activity?.['refinement-writer'];
+  if (refinementWorker?.active) refinementProgressDetail.textContent += ` · Redactando ${refinementWorker.current_path || 'video'}`;
+  const refinementTimer = status.refinement_timer || {};
+  if (refinementTimer.load_state === 'not-found') refinementProgressDetail.textContent += ' · Timer no instalado';
+  else if (refinementTimer.active) refinementProgressDetail.textContent += ` · Timer activo${refinementTimer.next_run ? ` · próximo ${refinementTimer.next_run}` : ''}`;
+  else if (refinementTimer.available) refinementProgressDetail.textContent += refinementTimer.enabled ? ' · Timer habilitado' : ' · Timer deshabilitado';
   const faceRetryEnabled = status.worker_configuration?.['face-embedding-indexer']?.retry_failed;
   const faceFailures = count(faceProgress.failed)
     ? ` · ${format(faceProgress.failed)} con error${faceRetryEnabled ? ' · reintentos habilitados' : ' · reintentos desactivados'}`
     : '';
-  faceProgressDetail.textContent = `${format(faceProgress.remaining)} videos pendientes${faceFailures} · ${format(faceProgress.faces?.unassigned)} rostros por revisar · ${format(faceProgress.faces?.ignored)} ignorados · ${faceProgress.model || 'modelo local no configurado'}`;
+  faceProgressDetail.textContent = `${format(faceProgress.remaining)} videos pendientes${faceFailures} · ${format(faceProgress.retry?.waiting)} esperando reintento · ${format(faceProgress.retry?.exhausted)} sin más reintentos · ${format(faceProgress.faces?.unassigned)} rostros por revisar · ${format(faceProgress.faces?.automatic)} asignados automáticamente · ${format(faceProgress.faces?.ignored)} ignorados · ${faceProgress.model || 'modelo local no configurado'}`;
   technicalProgressDetail.textContent = [
     `${format(technical.pending)} pendientes`,
     `${format(technical.failed)} con error`,
@@ -317,6 +395,28 @@ function renderProcessProgress(status) {
     : 'Procesamiento habilitado.';
   if (control.changed_by && control.changed_by !== 'initialization') {
     automationControlStatus.textContent += ` Último cambio: ${control.changed_by}, ${control.changed_at}.`;
+  }
+  manualProcessControls.classList.toggle('hidden', !status.can_control_automation);
+  const selectedWorkers = manualProcessSelect.value === 'pipeline'
+    ? ['indexer', 'visual-analyzer']
+    : [{ technical: 'indexer', visual: 'visual-analyzer', faces: 'face-embedding-indexer', refinement: 'refinement-writer' }[manualProcessSelect.value]];
+  const workerBusy = selectedWorkers.some(name => status.worker_activity?.[name]?.active);
+  const manualRun = (status.manual_process_runs || []).find(item => {
+    if (!['starting', 'running'].includes(item.status)) return false;
+    const runningWorkers = item.process === 'pipeline' ? ['indexer', 'visual-analyzer']
+      : [{ technical: 'indexer', visual: 'visual-analyzer', faces: 'face-embedding-indexer', refinement: 'refinement-writer' }[item.process]];
+    return selectedWorkers.some(name => runningWorkers.includes(name));
+  });
+  const manualBusy = Boolean(manualRun);
+  manualProcessSelect.disabled = !status.can_control_automation || manualProcessRequestInFlight;
+  manualProcessBtn.disabled = !status.can_control_automation || Boolean(control.paused) || workerBusy || manualBusy || manualProcessRequestInFlight;
+  if (manualRun) manualProcessStatus.textContent = `${manualRun.label} en curso${manualRun.pid ? ` · proceso ${manualRun.pid}` : ''}.`;
+  else if (control.paused) manualProcessStatus.textContent = 'Reanudá el procesamiento para iniciar una tarea.';
+  else if (workerBusy) manualProcessStatus.textContent = 'Esta etapa ya está en curso. Podés elegir otra.';
+  else if (!manualProcessRequestInFlight) {
+    const recentManualRun = (status.manual_process_runs || []).at(-1);
+    if (recentManualRun) manualProcessStatus.textContent = recentManualRun.status === 'done'
+      ? `${recentManualRun.label}: terminó.` : `${recentManualRun.label}: terminó con error.`;
   }
   const manualRetries = [
     ...(status.visual_manual_retries || []).map(retry => ({ ...retry, stage: 'Visual' })),
@@ -412,15 +512,24 @@ function renderProcessProgress(status) {
 
 function setupEventListeners() {
   automationControlBtn.addEventListener('click', changeAutomationControl);
+  manualProcessBtn.addEventListener('click', startManualProcess);
+  manualProcessSelect.addEventListener('change', () => {
+    if (latestProcessStatus) renderProcessProgress(latestProcessStatus);
+  });
   // Refresh button
   refreshBtn.addEventListener('click', updateSearch);
   peopleDirectoryBtn.addEventListener('click', openPeopleDirectory);
   faceReviewBtn.addEventListener('click', openFaceReview);
+  refinementReviewBtn.addEventListener('click', openRefinementReview);
+  mobileRefinementReviewBtn.addEventListener('click', openRefinementReview);
   mobilePeopleDirectoryBtn.addEventListener('click', openPeopleDirectory);
   mobileFaceReviewBtn.addEventListener('click', openFaceReview);
   closePeopleDialog.addEventListener('click', () => peopleDialog.close());
   closeFaceReview.addEventListener('click', () => faceReviewDialog.close());
+  closeRefinementReview.addEventListener('click', () => refinementReviewDialog.close());
   faceLoadMore.addEventListener('click', () => loadFaceInbox(true));
+  faceInboxPendingMode.addEventListener('click', () => setFaceInboxMode('pending'));
+  faceInboxAutomaticMode.addEventListener('click', () => setFaceInboxMode('automatic'));
   faceAssignBtn.addEventListener('click', assignSelectedFaces);
   faceRejectBtn.addEventListener('click', rejectSelectedFace);
   facePersonSelect.addEventListener('change', () => { if (facePersonSelect.value) faceNewPersonName.value = ''; });
@@ -505,6 +614,31 @@ async function changeAutomationControl() {
     automationControlStatus.textContent = `No se pudo cambiar el estado: ${error.message}`;
   } finally {
     automationControlBtn.disabled = false;
+  }
+}
+
+async function startManualProcess() {
+  const token = tokenForEditing();
+  if (token === null) return;
+  manualProcessRequestInFlight = true;
+  manualProcessSelect.disabled = true;
+  manualProcessBtn.disabled = true;
+  manualProcessStatus.textContent = 'Iniciando proceso…';
+  try {
+    const response = await apiFetch(`${API_BASE}/api/index/run`, {
+      method: 'POST', headers: editingHeaders(token),
+      body: JSON.stringify({ process: manualProcessSelect.value })
+    });
+    if (response.status === 401) editToken = null;
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    manualProcessStatus.textContent = `${result.run?.label || 'Proceso'} iniciado.`;
+    await loadProcessProgress();
+  } catch (error) {
+    manualProcessStatus.textContent = `No se pudo iniciar: ${error.message}`;
+  } finally {
+    manualProcessRequestInFlight = false;
+    await loadProcessProgress();
   }
 }
 
@@ -871,6 +1005,9 @@ async function loadMetadata(relativePath) {
   exportMetadataBtn.classList.add('hidden');
   exportMetadataBtn.disabled = false;
   exportMetadataBtn.onclick = null;
+  syncJellyfinBtn.classList.add('hidden');
+  syncJellyfinBtn.disabled = false;
+  syncJellyfinBtn.onclick = null;
   importMetadataBtn.classList.add('hidden');
   importMetadataBtn.disabled = false;
   importMetadataBtn.onclick = null;
@@ -965,6 +1102,73 @@ async function loadMetadata(relativePath) {
           }
         } finally {
           exportMetadataBtn.disabled = false;
+        }
+      };
+    }
+    if (item.status === 'done' && item.visual_status === 'done' && item.visual_fingerprint === item.fingerprint &&
+        item.can_edit_people && item.jellyfin_configured && !item.refinement?.stale_approved) {
+      syncJellyfinBtn.classList.remove('hidden');
+      syncJellyfinBtn.onclick = async () => {
+        const relativePathForSync = item.relative_path;
+        syncJellyfinBtn.disabled = true;
+        metadataExportStatus.textContent = 'Consultando el elemento en Jellyfin…';
+        try {
+          const token = tokenForEditing();
+          if (token === null) throw new Error('Se canceló la autenticación');
+          const headers = editingHeaders(token);
+          const previewResponse = await apiFetch(`${API_BASE}/api/jellyfin/preview`, {
+            method: 'POST', headers, body: JSON.stringify({ path: relativePathForSync })
+          });
+          if (previewResponse.status === 401) editToken = null;
+          const preview = await previewResponse.json().catch(() => ({}));
+          if (!previewResponse.ok) throw new Error(preview.error || `HTTP ${previewResponse.status}`);
+          if (!preview.changed_fields.length) {
+            metadataExportStatus.textContent = `Jellyfin ya tiene esta ficha actualizada: ${preview.current_title}.`;
+            return;
+          }
+          const fieldNames = {
+            Name: 'título', Overview: 'descripción', PremiereDate: 'fecha', ProductionYear: 'año',
+            People: `personas confirmadas (${preview.people_count || 0})`, Tags: 'etiquetas',
+            ProductionLocations: 'lugares', Latitude: 'latitud', Longitude: 'longitud', Altitude: 'altitud',
+            CameraMake: 'fabricante de cámara', CameraModel: 'modelo de cámara'
+          };
+          const previewValue = (field, value) => {
+            if (field === 'Overview') return `${String(value).replace(/\s+/g, ' ').slice(0, 160)}${String(value).length > 160 ? '…' : ''}`;
+            if (field === 'People') {
+              const names = (value || []).filter(person => person.Role === 'Identificada por Video Home').map(person => person.Name);
+              return names.slice(0, 8).join(', ') + (names.length > 8 ? ` y ${names.length - 8} más` : '');
+            }
+            if (Array.isArray(value)) return value.slice(0, 8).join(', ') + (value.length > 8 ? ` y ${value.length - 8} más` : '');
+            if (typeof value === 'number' && ['Latitude', 'Longitude'].includes(field)) return value.toFixed(5);
+            if (field === 'PremiereDate') return String(value).slice(0, 10);
+            return String(value);
+          };
+          const description = preview.changed_fields.map(field => {
+            const value = previewValue(field, preview.proposed[field]);
+            return `• ${fieldNames[field] || field}${value ? `: ${value}` : ''}`;
+          }).join('\n');
+          if (!window.confirm(`Se actualizará “${preview.current_title}” en Jellyfin con los campos siguientes:\n\n${description}\n\n¿Sincronizar esta ficha?`)) {
+            metadataExportStatus.textContent = 'Sin cambios en Jellyfin.';
+            return;
+          }
+          metadataExportStatus.textContent = 'Sincronizando ficha…';
+          const syncResponse = await apiFetch(`${API_BASE}/api/jellyfin/sync`, {
+            method: 'POST', headers,
+            body: JSON.stringify({ path: relativePathForSync, fingerprint: item.fingerprint,
+              visual_revision: item.visual_revision, refinement_token: preview.refinement_token })
+          });
+          if (syncResponse.status === 401) editToken = null;
+          const result = await syncResponse.json().catch(() => ({}));
+          if (!syncResponse.ok) throw new Error(result.error || `HTTP ${syncResponse.status}`);
+          if (selectedVideoPath === relativePathForSync) {
+            metadataExportStatus.textContent = result.changed
+              ? `Ficha sincronizada con Jellyfin (${result.changed_fields.length} campos).`
+              : 'La ficha ya estaba actualizada en Jellyfin.';
+          }
+        } catch (error) {
+          if (selectedVideoPath === relativePathForSync) metadataExportStatus.textContent = `No se pudo sincronizar con Jellyfin: ${error.message}`;
+        } finally {
+          syncJellyfinBtn.disabled = false;
         }
       };
     }
@@ -1114,15 +1318,34 @@ function renderFaceInbox() {
     title.textContent = faceCardTitle(face);
     const time = document.createElement('span');
     time.className = 'block text-xs text-gray-400';
-    time.textContent = `Minuto ${faceTimeLabel(face.at_seconds)}`;
+    time.textContent = faceInboxMode === 'automatic'
+      ? `${face.person_name || 'Identidad sin nombre'} · ${Number(face.assignment_similarity).toFixed(3)} · minuto ${faceTimeLabel(face.at_seconds)}`
+      : `Minuto ${faceTimeLabel(face.at_seconds)}`;
     button.append(image, title, time);
     button.addEventListener('click', () => selectFaceForReview(face));
     faceInboxGrid.appendChild(button);
   }
+  const inboxLabel = faceInboxMode === 'automatic' ? 'asignaciones automáticas' : 'rostros sin nombre';
   faceInboxStatus.textContent = faceInboxItems.length
-    ? `${faceInboxTotal.toLocaleString('es-AR')} rostros sin nombre · mostrando ${faceInboxItems.length}`
-    : 'No hay rostros pendientes en los videos ya procesados.';
+    ? `${faceInboxTotal.toLocaleString('es-AR')} ${inboxLabel} · mostrando ${faceInboxItems.length}`
+    : faceInboxMode === 'automatic' ? 'Todavía no hay asignaciones automáticas para revisar.'
+      : 'No hay rostros pendientes en los videos ya procesados.';
   faceLoadMore.classList.toggle('hidden', !faceInboxCursor || faceInboxItems.length >= faceInboxTotal);
+}
+
+async function setFaceInboxMode(mode) {
+  faceInboxMode = mode === 'automatic' ? 'automatic' : 'pending';
+  faceInboxPendingMode.setAttribute('aria-pressed', String(faceInboxMode === 'pending'));
+  faceInboxAutomaticMode.setAttribute('aria-pressed', String(faceInboxMode === 'automatic'));
+  faceInboxPendingMode.className = `rounded border px-3 py-1 text-xs ${faceInboxMode === 'pending' ? 'border-amber-500' : 'border-gray-600'}`;
+  faceInboxAutomaticMode.className = `rounded border px-3 py-1 text-xs ${faceInboxMode === 'automatic' ? 'border-amber-500' : 'border-gray-600'}`;
+  selectedFaceForReview = null;
+  selectedFaceIds = new Set();
+  faceRejectBtn.classList.toggle('hidden', faceInboxMode === 'automatic');
+  faceRejectBtn.disabled = true;
+  faceNeighborGrid.replaceChildren();
+  faceSelectedStatus.textContent = 'Elegí un rostro para revisar sus coincidencias.';
+  await loadFaceInbox(false);
 }
 
 async function loadFaceInbox(append = false) {
@@ -1135,13 +1358,14 @@ async function loadFaceInbox(append = false) {
   const params = new URLSearchParams({ limit: '18' });
   if (append && faceInboxCursor) params.set('after', String(faceInboxCursor));
   try {
-    const response = await apiFetch(`${API_BASE}/api/faces/inbox?${params}`);
+    const endpoint = faceInboxMode === 'automatic' ? 'automatic' : 'inbox';
+    const response = await apiFetch(`${API_BASE}/api/faces/${endpoint}?${params}`);
     const result = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
     faceInboxItems.push(...(result.items || []));
     faceInboxCursor = result.next_after_id || 0;
     faceInboxTotal = result.total || 0;
-    if (!append && result.progress?.remaining && !faceInboxTotal) {
+    if (faceInboxMode === 'pending' && !append && result.progress?.remaining && !faceInboxTotal) {
       faceInboxStatus.textContent = `${result.progress.remaining.toLocaleString('es-AR')} videos pendientes de procesar localmente; todavía no hay rostros para revisar.`;
       faceLoadMore.classList.add('hidden');
       return;
@@ -1192,11 +1416,12 @@ async function selectFaceForReview(face) {
   faceAssignBtn.textContent = 'Asignar identidad a 1 rostro';
   faceRejectBtn.textContent = 'Ignorar 1 rostro sin identificar';
   faceRejectBtn.disabled = false;
+  faceRejectBtn.classList.toggle('hidden', faceInboxMode === 'automatic');
   faceAssignmentControls.classList.toggle('hidden', !canEditPeopleDirectory);
   facePersonSelect.replaceChildren();
   const placeholder = document.createElement('option');
   placeholder.value = '';
-  placeholder.textContent = 'Elegir identidad';
+  placeholder.textContent = face.assignment_source === 'automatic' ? 'Elegir identidad para confirmar o corregir' : 'Elegir identidad';
   facePersonSelect.appendChild(placeholder);
   for (const person of knownPeople) {
     const option = document.createElement('option');
@@ -1204,7 +1429,9 @@ async function selectFaceForReview(face) {
     option.textContent = person.name;
     facePersonSelect.appendChild(option);
   }
-  faceSelectedStatus.textContent = `${faceCardTitle(face)} · minuto ${faceTimeLabel(face.at_seconds)} · detección ${Math.round(face.detection_score * 100)}%`;
+  faceSelectedStatus.textContent = face.assignment_source === 'automatic'
+    ? `${faceCardTitle(face)} · minuto ${faceTimeLabel(face.at_seconds)} · asignada a ${face.person_name} con similitud ${Number(face.assignment_similarity).toFixed(3)}; elegí una identidad para confirmar o corregir.`
+    : `${faceCardTitle(face)} · minuto ${faceTimeLabel(face.at_seconds)} · detección ${Math.round(face.detection_score * 100)}%`;
   faceNeighborGrid.replaceChildren();
   addFaceNeighborCard(face, { selected: true, disabled: true, description: 'Rostro elegido' });
   renderFaceInbox();
@@ -1213,21 +1440,35 @@ async function selectFaceForReview(face) {
     const result = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
     const neighbors = result.items || [];
-    const nearestAssigned = neighbors.find(item => item.person_id);
-    if (nearestAssigned) {
-      facePersonSelect.value = String(nearestAssigned.person_id);
-      faceSelectedStatus.textContent += ` · más cercano a ${nearestAssigned.person_name} (similitud ${nearestAssigned.similarity.toFixed(3)}; requiere confirmación)`;
-    } else {
-      faceSelectedStatus.textContent += ' · sin coincidencia cercana con personas confirmadas';
+    const suggestions = result.identity_suggestions || [];
+    const suggestionHeading = document.createElement('p');
+    suggestionHeading.className = 'col-span-full text-xs font-semibold text-amber-200';
+    suggestionHeading.textContent = suggestions.length
+      ? `Recomendaciones manuales (${Number(result.suggestion_threshold).toFixed(2)} a < ${Number(result.auto_assignment_threshold).toFixed(2)}). Elegir una solo completa el selector; hay que confirmar la asignación.`
+      : `No hay recomendaciones manuales entre ${Number(result.suggestion_threshold).toFixed(2)} y ${Number(result.auto_assignment_threshold).toFixed(2)}. La similitud es orientativa; revisá los vecinos antes de asignar.`;
+    faceNeighborGrid.appendChild(suggestionHeading);
+    for (const suggestion of suggestions) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'col-span-full rounded border border-amber-700 bg-amber-950/40 px-3 py-2 text-left text-sm hover:bg-amber-900/60';
+      button.textContent = `${suggestion.person_name} · similitud ${suggestion.similarity.toFixed(3)} · usar como sugerencia`;
+      button.addEventListener('click', () => {
+        facePersonSelect.value = String(suggestion.person_id);
+        faceSelectedStatus.textContent = `${faceCardTitle(face)} · minuto ${faceTimeLabel(face.at_seconds)} · sugerencia ${suggestion.person_name} (${suggestion.similarity.toFixed(3)}); confirmar con «Asignar identidad».`;
+      });
+      faceNeighborGrid.appendChild(button);
     }
+    faceSelectedStatus.textContent += suggestions.length
+      ? ` · ${suggestions.length} sugerencia(s) requieren confirmación`
+      : ' · sin sugerencias por encima del umbral; asignación manual disponible';
     for (const neighbor of neighbors) {
-      const description = `${neighbor.similarity.toFixed(3)}${neighbor.person_name ? ` · ${neighbor.person_name}` : ''}${neighbor.review_status === 'unassigned' ? ' · sin nombre' : ''}`;
+      const description = `${neighbor.similarity.toFixed(3)} · sin identidad`;
       addFaceNeighborCard(neighbor, { description });
     }
     if (!neighbors.length) {
       const empty = document.createElement('p');
       empty.className = 'col-span-full text-xs text-gray-500';
-      empty.textContent = 'Todavía no hay otros embeddings faciales para comparar.';
+      empty.textContent = 'No hay otros rostros sin identidad para comparar.';
       faceNeighborGrid.appendChild(empty);
     }
   } catch (error) {
@@ -1362,6 +1603,13 @@ function renderPeopleDirectory() {
     });
     row.appendChild(button);
     if (canEditPeopleDirectory) {
+      const describe = document.createElement('button');
+      describe.type = 'button';
+      describe.className = 'shrink-0 rounded border border-gray-600 px-2 py-1 text-xs text-gray-300 hover:bg-gray-600 hover:text-white';
+      describe.textContent = person.description ? 'Editar contexto' : 'Agregar contexto';
+      describe.setAttribute('aria-label', `Describir quién es ${person.name}`);
+      describe.addEventListener('click', () => describeDirectoryPerson(person));
+      row.appendChild(describe);
       const rename = document.createElement('button');
       rename.type = 'button';
       rename.className = 'shrink-0 rounded border border-gray-600 px-2 py-1 text-xs text-gray-300 hover:bg-gray-600 hover:text-white';
@@ -1416,9 +1664,36 @@ function renderPeopleDirectory() {
         row.appendChild(panel);
       }
     }
+    if (person.description) {
+      const description = document.createElement('p');
+      description.className = 'w-full text-xs text-gray-400';
+      description.textContent = person.description;
+      row.appendChild(description);
+    }
     peopleDirectory.appendChild(row);
   }
   renderPersonMergeHistory();
+}
+
+async function describeDirectoryPerson(person) {
+  const description = window.prompt(`¿Quién es ${person.name}? Escribí solo datos que quieras usar en las descripciones. Dejá vacío para borrar el contexto.`, person.description || '');
+  if (description == null || description.trim() === (person.description || '')) return;
+  if (description.length > 500) return window.alert('El contexto puede tener hasta 500 caracteres.');
+  const token = tokenForEditing();
+  if (token === null) return;
+  try {
+    const response = await apiFetch(`${API_BASE}/api/people/${person.id}/description`, {
+      method: 'PATCH', headers: editingHeaders(token), body: JSON.stringify({ description })
+    });
+    if (response.status === 401) editToken = null;
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    knownPeople = result.items || knownPeople;
+    renderPeopleDirectory();
+    if (selectedVideoPath) loadMetadata(selectedVideoPath);
+  } catch (error) {
+    window.alert(`No se pudo guardar el contexto: ${error.message}`);
+  }
 }
 
 async function renameDirectoryPerson(person) {
@@ -1550,6 +1825,207 @@ function renderFaceIdentityResults(item) {
   }
 }
 
+async function openRefinementReview() {
+  refinementReviewDialog.showModal();
+  await loadRefinementReviewQueue();
+}
+
+async function loadRefinementReviewQueue() {
+  refinementQueue.replaceChildren();
+  refinementQueueStatus.textContent = 'Cargando propuestas pendientes…';
+  try {
+    const response = await apiFetch(`${API_BASE}/api/refinement/review-queue`);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const result = await response.json();
+    const items = result.items || [];
+    refinementQueueStatus.textContent = items.length
+      ? `${items.length} ${items.length === 1 ? 'ficha pendiente' : 'fichas pendientes'}${items.length >= result.limit ? ` · mostrando las primeras ${result.limit}` : ''}${result.can_edit ? '' : ' · edición no habilitada en el servidor'}`
+      : 'No hay fichas pendientes de revisión.';
+    for (const item of items) {
+      const card = document.createElement('article');
+      card.className = 'rounded-lg border border-gray-700 bg-gray-900/50 p-3 sm:p-4';
+      const heading = document.createElement('div');
+      heading.className = 'mb-3 flex flex-wrap items-start justify-between gap-2';
+      const file = document.createElement('div');
+      file.className = 'min-w-0';
+      const path = document.createElement('p');
+      path.className = 'break-all text-sm font-medium text-gray-100';
+      path.textContent = item.relative_path;
+      file.appendChild(path);
+      const originalTitle = document.createElement('p');
+      originalTitle.className = 'mt-1 text-xs text-gray-400';
+      originalTitle.textContent = `Título visual original: ${item.visual_title || 'Sin título'}`;
+      file.appendChild(originalTitle);
+      const openVideo = document.createElement('button');
+      openVideo.type = 'button';
+      openVideo.className = 'shrink-0 rounded border border-gray-600 px-2 py-1 text-xs hover:bg-gray-700';
+      openVideo.textContent = 'Abrir video';
+      openVideo.addEventListener('click', () => {
+        refinementReviewDialog.close();
+        playVideo(item.relative_path, item.relative_path.split('/').pop());
+      });
+      heading.append(file, openVideo);
+      card.appendChild(heading);
+
+      const titleLabel = document.createElement('label');
+      titleLabel.className = 'mb-2 block text-xs text-gray-300';
+      titleLabel.textContent = 'Título propuesto';
+      const title = document.createElement('input');
+      title.type = 'text'; title.maxLength = 120; title.value = item.title || '';
+      title.className = 'mt-1 w-full rounded border border-gray-600 bg-gray-800 px-2 py-2 text-sm text-white';
+      titleLabel.appendChild(title);
+      card.appendChild(titleLabel);
+
+      const summaryLabel = document.createElement('label');
+      summaryLabel.className = 'mb-3 block text-xs text-gray-300';
+      summaryLabel.textContent = 'Descripción propuesta';
+      const summary = document.createElement('textarea');
+      summary.maxLength = 1600; summary.rows = 3; summary.value = item.summary || '';
+      summary.className = 'mt-1 w-full rounded border border-gray-600 bg-gray-800 px-2 py-2 text-sm text-white';
+      summaryLabel.appendChild(summary);
+      card.appendChild(summaryLabel);
+
+      const actions = document.createElement('div');
+      actions.className = 'flex flex-wrap items-center gap-2';
+      const approve = document.createElement('button');
+      approve.type = 'button';
+      approve.className = 'rounded bg-emerald-700 px-3 py-2 text-xs hover:bg-emerald-600 disabled:opacity-50';
+      approve.textContent = 'Guardar y aprobar';
+      const reject = document.createElement('button');
+      reject.type = 'button';
+      reject.className = 'rounded border border-gray-600 px-3 py-2 text-xs hover:bg-gray-700 disabled:opacity-50';
+      reject.textContent = 'Descartar';
+      const status = document.createElement('span');
+      status.className = 'text-xs text-gray-400';
+      status.setAttribute('role', 'status');
+      if (!result.can_edit) { approve.disabled = true; reject.disabled = true; }
+      const reviewProposal = async action => {
+        if (action === 'rejected' && !window.confirm('¿Descartar esta propuesta? Se conservará la ficha visual original.')) return;
+        const token = tokenForEditing();
+        if (token === null) return;
+        approve.disabled = true; reject.disabled = true;
+        status.textContent = action === 'approved' ? 'Guardando aprobación…' : 'Descartando…';
+        try {
+          const saved = await apiFetch(`${API_BASE}/api/refinement/review`, {
+            method: 'POST', headers: editingHeaders(token),
+            body: JSON.stringify({ path: item.relative_path, input_hash: item.input_hash,
+              action, title: title.value, summary: summary.value })
+          });
+          if (saved.status === 401) editToken = null;
+          const payload = await saved.json().catch(() => ({}));
+          if (!saved.ok) throw new Error(payload.error || `HTTP ${saved.status}`);
+          await loadRefinementReviewQueue();
+          loadProcessProgress();
+          if (selectedVideoPath === item.relative_path) await loadMetadata(item.relative_path);
+        } catch (error) {
+          status.textContent = `No se pudo guardar: ${error.message}`;
+          approve.disabled = false; reject.disabled = false;
+        }
+      };
+      approve.addEventListener('click', () => reviewProposal('approved'));
+      reject.addEventListener('click', () => reviewProposal('rejected'));
+      actions.append(approve, reject, status);
+      card.appendChild(actions);
+
+      const original = document.createElement('details');
+      original.className = 'mt-3 border-t border-gray-700 pt-2 text-xs text-gray-400';
+      const originalSummary = document.createElement('summary');
+      originalSummary.className = 'cursor-pointer';
+      originalSummary.textContent = 'Comparar con la descripción visual original';
+      original.appendChild(originalSummary);
+      const originalText = document.createElement('p');
+      originalText.className = 'mt-2 whitespace-pre-wrap';
+      originalText.textContent = item.visual_summary || 'Sin descripción visual original.';
+      original.appendChild(originalText);
+      card.appendChild(original);
+      refinementQueue.appendChild(card);
+    }
+  } catch (error) {
+    refinementQueueStatus.textContent = `No se pudieron cargar las fichas pendientes: ${error.message}`;
+  }
+}
+
+function renderRefinement(item) {
+  const state = item.refinement || { status: 'unavailable' };
+  refinementPanel.classList.toggle('hidden', state.status === 'unavailable');
+  refinementProposal.classList.add('hidden');
+  retryRefinementBtn.classList.add('hidden');
+  originalVisualDetails.classList.add('hidden');
+  approveRefinementBtn.disabled = false;
+  rejectRefinementBtn.disabled = false;
+  if (state.approved) {
+    visualTitle.textContent = state.approved.title;
+    visualSummary.textContent = state.approved.summary;
+    refinementStatus.textContent = 'Texto revisado y aprobado';
+    originalVisualTitle.textContent = item.visual_title || '';
+    originalVisualSummary.textContent = item.visual_summary || '';
+    originalVisualDetails.classList.remove('hidden');
+    return;
+  }
+  visualTitle.textContent = item.visual_title || 'Descripción visual';
+  visualSummary.textContent = item.visual_summary || '';
+  if (state.status === 'proposed' && state.proposal) {
+    refinementStatus.textContent = 'Propuesta de redacción: corregila si hace falta y aprobala para usarla en Jellyfin.';
+    refinementTitle.value = state.proposal.title;
+    refinementSummary.value = state.proposal.summary;
+    refinementProposal.classList.toggle('hidden', !item.can_edit_people);
+    const submit = async action => {
+      if (action === 'rejected' && !window.confirm('¿Descartar esta propuesta? Se conservará la ficha visual original.')) return;
+      const token = tokenForEditing();
+      if (token === null) return;
+      approveRefinementBtn.disabled = true;
+      rejectRefinementBtn.disabled = true;
+      try {
+        const response = await apiFetch(`${API_BASE}/api/refinement/review`, {
+          method: 'POST', headers: editingHeaders(token),
+          body: JSON.stringify({ path: item.relative_path, input_hash: state.input_hash, action,
+            title: refinementTitle.value, summary: refinementSummary.value })
+        });
+        if (response.status === 401) editToken = null;
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+        if (selectedVideoPath === item.relative_path) await loadMetadata(item.relative_path);
+      } catch (error) {
+        refinementStatus.textContent = `No se pudo guardar la revisión: ${error.message}`;
+        approveRefinementBtn.disabled = false;
+        rejectRefinementBtn.disabled = false;
+      }
+    };
+    approveRefinementBtn.onclick = () => submit('approved');
+    rejectRefinementBtn.onclick = () => submit('rejected');
+  } else if (state.status === 'retry_wait') {
+    refinementStatus.textContent = state.stale_approved
+      ? 'La aprobación anterior quedó desactualizada. La redacción se reintentará en el próximo lote.'
+      : 'La redacción falló; se reintentará en el próximo lote.';
+  } else if (state.status === 'failed') {
+    refinementStatus.textContent = 'La redacción falló después de tres intentos.';
+    retryRefinementBtn.classList.toggle('hidden', !item.can_edit_people);
+    retryRefinementBtn.onclick = async () => {
+      const token = tokenForEditing();
+      if (token === null) return;
+      retryRefinementBtn.disabled = true;
+      try {
+        const response = await apiFetch(`${API_BASE}/api/refinement/retry`, {
+          method: 'POST', headers: editingHeaders(token),
+          body: JSON.stringify({ path: item.relative_path, input_hash: state.input_hash })
+        });
+        if (response.status === 401) editToken = null;
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+        if (selectedVideoPath === item.relative_path) await loadMetadata(item.relative_path);
+      } catch (error) {
+        refinementStatus.textContent = `No se pudo reintentar: ${error.message}`;
+      } finally { retryRefinementBtn.disabled = false; }
+    };
+  } else if (state.status === 'rejected') {
+    refinementStatus.textContent = 'Propuesta descartada. Se muestra la ficha visual original.';
+  } else {
+    refinementStatus.textContent = state.stale_approved
+      ? 'La aprobación anterior quedó desactualizada. Se generará otra propuesta en el próximo lote.'
+      : 'Redacción pendiente: se generará en el próximo lote.';
+  }
+}
+
 function renderVisualMetadata(item) {
   renderFaceIdentityResults(item);
   if (item.visual_status !== 'done') {
@@ -1587,8 +2063,7 @@ function renderVisualMetadata(item) {
     return;
   }
   visualMetadata.classList.remove('hidden');
-  visualTitle.textContent = item.visual_title || 'Descripción visual';
-  visualSummary.textContent = item.visual_summary || '';
+  renderRefinement(item);
   visualUncertainty.textContent = item.visual_uncertainty ? `Límites de la descripción: ${item.visual_uncertainty}` : 'Descripción basada en fotogramas puntuales.';
   renderIdentityAssignments(item);
   renderTimedList(visualEvents, 'Momentos observados', item.visual_events, item);

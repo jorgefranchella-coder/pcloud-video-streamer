@@ -10,6 +10,7 @@
     "pipeline": "node pipeline.js",
     "inventory": "INDEX_MODE=inventory node indexer.js",
     "analyze": "node visual-analyzer.js",
+    "refine": "node refinement-worker.js",
     "faces": "node face-indexer.js",
     "faces:setup": "bash scripts/setup-face-runtime.sh",
     "backup": "node scripts/backup-data.js",

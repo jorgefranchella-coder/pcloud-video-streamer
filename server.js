@@ -4,10 +4,13 @@ const path = require('path');
 const cors = require('cors');
 const mime = require('mime-types');
 const crypto = require('crypto');
-const { execFile } = require('child_process');
+const os = require('os');
+const { execFile, spawn } = require('child_process');
 const { promisify } = require('util');
 const metadata = require('./metadata-store');
 const { faceConfiguration } = require('./config');
+const jellyfin = require('./jellyfin-sync');
+const refinement = require('./refinement-store');
 
 const app = express();
 app.disable('x-powered-by');
@@ -20,6 +23,7 @@ const VIDEO_ROOT = process.env.VIDEO_ROOT || '/mnt/pcloud/My Videos';
 const ROOT_RESOLVED = path.resolve(VIDEO_ROOT);
 const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(__dirname, 'data'));
 const execFileAsync = promisify(execFile);
+const manualProcessRuns = new Map();
 const ACCESS_TOKEN = process.env.ACCESS_TOKEN || '';
 const ACCESS_COOKIE_SECURE = process.env.ACCESS_COOKIE_SECURE === undefined ? '0' : process.env.ACCESS_COOKIE_SECURE;
 const ACCESS_COOKIE_SAMESITE = process.env.ACCESS_COOKIE_SAMESITE === undefined ? 'Strict' : process.env.ACCESS_COOKIE_SAMESITE;
@@ -251,23 +255,159 @@ async function getPipelineTimerStatus() {
   }
 }
 
+async function getRefinementTimerStatus() {
+  try {
+    const { stdout } = await execFileAsync('systemctl', [
+      'show', 'pcloud-video-refinement.timer',
+      '--property=LoadState,ActiveState,UnitFileState,NextElapseUSecRealtime,LastTriggerUSec', '--no-pager'
+    ], { timeout: 2000, maxBuffer: 10000 });
+    const fields = Object.fromEntries(stdout.trim().split('\n').map(line => {
+      const separator = line.indexOf('=');
+      return separator < 0 ? [line, ''] : [line.slice(0, separator), line.slice(separator + 1)];
+    }));
+    return {
+      available: fields.LoadState === 'loaded', load_state: fields.LoadState || 'unknown',
+      active: fields.ActiveState === 'active', enabled: fields.UnitFileState === 'enabled',
+      next_run: fields.NextElapseUSecRealtime || null, last_run: fields.LastTriggerUSec || null
+    };
+  } catch {
+    return { available: false, load_state: 'unknown', active: false, enabled: false, next_run: null, last_run: null };
+  }
+}
+
 function asyncRoute(handler) {
   return (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 }
 
 app.get('/api/index/status', asyncRoute(async (_req, res) => {
-  const [visualTimer, pipelineTimer, faceTimer] = await Promise.all([
-    getVisualTimerStatus(), getPipelineTimerStatus(), getFaceTimerStatus()
+  const [visualTimer, pipelineTimer, faceTimer, refinementTimer] = await Promise.all([
+    getVisualTimerStatus(), getPipelineTimerStatus(), getFaceTimerStatus(), getRefinementTimerStatus()
   ]);
   res.json({ ...metadata.status(), visual_timer: visualTimer, pipeline_timer: pipelineTimer,
-    face_timer: faceTimer,
-    can_control_automation: Boolean(process.env.METADATA_EDIT_TOKEN) });
+    face_timer: faceTimer, refinement_timer: refinementTimer, refinement_progress: refinement.progress(),
+    can_control_automation: Boolean(process.env.METADATA_EDIT_TOKEN),
+    manual_process_runs: [...manualProcessRuns.values()] });
 }));
 
 app.post('/api/index/control', (req, res) => {
   if (!authorizeMetadataEdit(req, res)) return;
   if (typeof req.body?.paused !== 'boolean') return res.status(400).json({ error: 'paused must be a boolean' });
   res.json({ automation_control: metadata.setAutomationPaused(req.body.paused) });
+});
+
+const manualProcessDefinitions = {
+  technical: { label: 'inventario técnico', script: 'indexer.js', worker: 'indexer' },
+  visual: { label: 'fichas visuales', script: 'visual-analyzer.js', worker: 'visual-analyzer' },
+  faces: { label: 'indexación local de rostros', script: 'face-indexer.js', worker: 'face-embedding-indexer' },
+  refinement: { label: 'redacción de fichas', script: 'refinement-worker.js', worker: 'refinement-writer' },
+  pipeline: { label: 'pipeline técnico y visual', script: 'pipeline.js', worker: 'pipeline' }
+};
+
+function manualProcessEnvironment(processName) {
+  const env = { ...process.env };
+  const dataDir = path.resolve(process.env.DATA_DIR || path.join(__dirname, 'data'));
+  for (const name of Object.keys(env)) {
+    if (['ACCESS_TOKEN', 'METADATA_EDIT_TOKEN', 'CORS_ORIGINS'].includes(name) || name.startsWith('JELLYFIN_')) delete env[name];
+  }
+  if (!['visual', 'refinement', 'pipeline'].includes(processName)) {
+    delete env.OPENROUTER_API_KEY;
+    delete env.OPENROUTER_API_URL;
+    delete env.OPENROUTER_MODEL;
+  }
+  if (processName === 'technical' || processName === 'pipeline') env.MAX_PROBES ||= '100';
+  if (processName === 'visual' || processName === 'pipeline') {
+    env.MAX_VISUAL ||= '5';
+    env.RETRY_VISUAL_FAILED ||= '1';
+  }
+  if (processName === 'faces') {
+    env.FACE_INDEXING_ENABLED = '1';
+    env.FACE_PYTHON ||= path.join(dataDir, 'face-runtime', 'bin', 'python');
+    env.FACE_MODEL_DIR ||= path.join(dataDir, 'models', 'faces');
+    env.FACE_MAX_VIDEOS ||= '10';
+    env.FACE_SAMPLE_INTERVAL_SECONDS ||= '20';
+    env.FACE_MAX_FRAMES_PER_VIDEO ||= '24';
+    env.FACE_MAX_DIMENSION ||= '960';
+    env.FACE_MIN_FACE_SIZE ||= '48';
+    env.FACE_DETECTION_THRESHOLD ||= '0.75';
+    env.FACE_RETRY_FAILED ||= '1';
+  }
+  if (processName === 'refinement') {
+    env.MAX_REFINEMENTS ||= '5';
+    env.MAX_REFINEMENT_REQUESTS_PER_DAY ||= '30';
+  }
+  return env;
+}
+
+app.post('/api/index/run', (req, res) => {
+  if (!authorizeMetadataEdit(req, res)) return;
+  const processName = req.body?.process;
+  const definition = manualProcessDefinitions[processName];
+  if (!definition) return res.status(400).json({ error: 'Unknown process' });
+  if (metadata.getAutomationControl().paused) {
+    return res.status(409).json({ error: 'El procesamiento está pausado. Reanudalo antes de iniciar una tarea.' });
+  }
+  if (['visual', 'refinement', 'pipeline'].includes(processName) && !process.env.OPENROUTER_API_KEY) {
+    return res.status(503).json({ error: 'Falta configurar OPENROUTER_API_KEY en el servicio web.' });
+  }
+  const providerControl = metadata.getVisualProviderControl();
+  if (processName === 'visual' && providerControl &&
+      (!providerControl.paused_until || new Date(`${providerControl.paused_until.replace(' ', 'T')}Z`).getTime() > Date.now())) {
+    return res.status(409).json({ error: `El proveedor visual está pausado: ${providerControl.reason}` });
+  }
+  const requestedWorkers = processName === 'pipeline' ? ['indexer', 'visual-analyzer'] : [definition.worker];
+  if ([...manualProcessRuns.values()].some(run => {
+    if (!['starting', 'running'].includes(run.status)) return false;
+    const runningWorkers = run.process === 'pipeline' ? ['indexer', 'visual-analyzer']
+      : [manualProcessDefinitions[run.process]?.worker];
+    return requestedWorkers.some(worker => runningWorkers.includes(worker));
+  })) {
+    return res.status(409).json({ error: 'Ya hay una ejecución de esa etapa iniciada.' });
+  }
+  const locks = metadata.db.prepare(`SELECT name, owner_pid, owner_host FROM process_locks
+    WHERE name IN (${requestedWorkers.map(() => '?').join(',')})`).all(...requestedWorkers);
+  for (const lock of locks) {
+    let ownerAlive = true;
+    if (lock.owner_host === os.hostname()) {
+      try { process.kill(lock.owner_pid, 0); }
+      catch (error) { ownerAlive = error.code !== 'ESRCH'; }
+    }
+    if (ownerAlive) return res.status(409).json({ error: 'Esa etapa ya está trabajando. Esperá a que termine y volvé a intentar.' });
+  }
+
+  const runId = crypto.randomUUID();
+  const run = { id: runId, process: processName, label: definition.label, status: 'starting', started_at: new Date().toISOString() };
+  let child;
+  try {
+    child = spawn(process.execPath, [path.join(__dirname, definition.script)], {
+      cwd: __dirname, env: manualProcessEnvironment(processName),
+      stdio: ['ignore', 'inherit', 'inherit']
+    });
+  } catch (error) {
+    console.error(`Could not start manual ${processName} process: ${error.message}`);
+    return res.status(500).json({ error: 'No se pudo iniciar el proceso.' });
+  }
+  run.pid = child.pid || null;
+  run.status = 'running';
+  manualProcessRuns.set(runId, run);
+  if (processName === 'faces' && child.pid) {
+    try { os.setPriority(child.pid, 10); }
+    catch (error) { console.warn(`Could not lower priority for manual face indexing: ${error.message}`); }
+  }
+  child.once('error', error => {
+    console.error(`Manual ${processName} process failed to start: ${error.message}`);
+    run.status = 'failed';
+    run.finished_at = new Date().toISOString();
+    setTimeout(() => manualProcessRuns.delete(runId), 60000).unref();
+  });
+  child.once('close', (code, signal) => {
+    run.status = code === 0 ? 'done' : 'failed';
+    run.exit_code = code;
+    run.signal = signal;
+    run.finished_at = new Date().toISOString();
+    console.log(`Manual ${processName} process finished: ${run.status}${code == null ? ` (${signal || 'unknown signal'})` : ` (exit ${code})`}`);
+    setTimeout(() => manualProcessRuns.delete(runId), 60000).unref();
+  });
+  res.status(202).json({ accepted: true, run });
 });
 
 app.get('/api/people', (_req, res) => {
@@ -286,13 +426,26 @@ app.get('/api/faces/inbox', (req, res) => {
     progress: metadata.faceProgress(modelVersion, faceConfiguration().model_version), can_edit_people: Boolean(process.env.METADATA_EDIT_TOKEN) });
 });
 
+app.get('/api/faces/automatic', (req, res) => {
+  const afterId = req.query.after === undefined ? 0 : Number(req.query.after);
+  const limit = req.query.limit === undefined ? 36 : Number(req.query.limit);
+  if (!Number.isSafeInteger(afterId) || afterId < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 60) {
+    return res.status(400).json({ error: 'Invalid automatic face page' });
+  }
+  const modelVersion = faceConfiguration().index_version;
+  res.json({ ...metadata.listAutoAssignedFaces({ afterId, limit, modelVersion }),
+    progress: metadata.faceProgress(modelVersion, faceConfiguration().model_version), can_edit_people: Boolean(process.env.METADATA_EDIT_TOKEN) });
+});
+
 app.get('/api/faces/:id/neighbors', (req, res) => {
   const faceId = /^\d+$/.test(req.params.id) ? Number(req.params.id) : NaN;
   const limit = req.query.limit === undefined ? 24 : Number(req.query.limit);
   if (!Number.isSafeInteger(faceId) || faceId < 1 || !Number.isSafeInteger(limit) || limit < 1 || limit > 60) {
     return res.status(400).json({ error: 'Invalid face or result limit' });
   }
-  const result = metadata.findFaceNeighbors(faceId, faceConfiguration().index_version, limit);
+  const faceConfig = faceConfiguration();
+  const result = metadata.findFaceNeighbors(faceId, faceConfig.index_version, limit,
+    faceConfig.suggestion_threshold, faceConfig.auto_assignment_threshold);
   if (!result) return res.status(404).json({ error: 'Face observation is no longer available' });
   res.json(result);
 });
@@ -420,6 +573,17 @@ app.patch('/api/people/:id', (req, res) => {
   }
 });
 
+app.patch('/api/people/:id/description', (req, res) => {
+  if (!authorizeMetadataEdit(req, res)) return;
+  const id = /^\d+$/.test(req.params.id) ? Number(req.params.id) : NaN;
+  if (!Number.isSafeInteger(id) || id < 1 || typeof req.body?.description !== 'string' ||
+      req.body.description.length > 500) return res.status(400).json({ error: 'Invalid person description' });
+  const person = metadata.updatePersonDescription(id, req.body.description);
+  if (!person) return res.status(404).json({ error: 'Person not found' });
+  refinement.refreshApprovedSearch(null, true);
+  res.json({ person, items: metadata.listPeople() });
+});
+
 app.get('/api/search', async (req, res) => {
   const query = String(req.query.q || '').trim().slice(0, 100);
   if (req.query.mode !== undefined && req.query.mode !== 'text') {
@@ -460,7 +624,15 @@ app.get('/api/search', async (req, res) => {
   if (!Number.isSafeInteger(offset) || offset < 0 || offset > 1000000) {
     return res.status(400).json({ error: 'offset must be an integer between 0 and 1000000' });
   }
+  refinement.refreshApprovedSearch();
   const matches = metadata.search({ query, from, to, personId, folder, limit: limit + 1, offset });
+  for (const match of matches) {
+    const approved = refinement.stateForVideo(metadata.getById.get(match.id)).approved;
+    if (approved) {
+      match.visual_title = approved.title;
+      match.visual_summary = approved.summary;
+    }
+  }
   const hasMore = matches.length > limit;
   res.json({ items: matches.slice(0, limit), limit, offset, has_more: hasMore });
 });
@@ -481,8 +653,115 @@ app.get('/api/metadata', (req, res) => {
     identified_faces: identifiedFaces,
     stale_identifications: metadata.staleIdentificationsForVideo(row.id),
     identity_history: metadata.identityHistoryForVideo(row.id),
+    refinement: refinement.stateForVideo(row),
+    jellyfin_configured: jellyfin.isConfigured(),
     can_edit_people: Boolean(process.env.METADATA_EDIT_TOKEN)
   });
+});
+
+function jellyfinSyncInput(req, res) {
+  const relativePath = req.body?.path;
+  const videoPath = safeResolve(relativePath);
+  if (typeof relativePath !== 'string' || !videoPath) {
+    res.status(400).json({ error: 'Invalid video path' });
+    return null;
+  }
+  const row = metadata.getByPath.get(relativePath);
+  if (!row) {
+    res.status(404).json({ error: 'Video not indexed' });
+    return null;
+  }
+  if (row.status !== 'done' || row.visual_status !== 'done' || row.visual_fingerprint !== row.fingerprint) {
+    res.status(409).json({ error: 'A current technical and visual sheet is required before synchronization' });
+    return null;
+  }
+  if (refinement.stateForVideo(row).stale_approved) {
+    res.status(409).json({ error: 'The approved text is outdated; review the new proposal before syncing' });
+    return null;
+  }
+  return { relativePath, videoPath, row };
+}
+
+async function verifySyncFingerprint(input, res) {
+  let stat;
+  try { stat = await fs.promises.stat(input.videoPath); }
+  catch { res.status(404).json({ error: 'Video file not found' }); return false; }
+  const fingerprint = `${stat.size}:${Math.round(stat.mtimeMs)}`;
+  if (fingerprint !== input.row.fingerprint) {
+    res.status(409).json({ error: 'Video changed since its metadata was indexed' });
+    return false;
+  }
+  return true;
+}
+
+function jellyfinSyncData(row) {
+  const identifiedPeople = metadata.identifiedPeopleForVideo(row.id);
+  return {
+    parsed: metadata.parseVideo(row),
+    approvedRefinement: refinement.stateForVideo(row).approved,
+    identifiedPeople,
+    identifiedFaces: metadata.identifiedFacesForVideo(row.id, faceConfiguration().index_version)
+  };
+}
+
+app.post('/api/jellyfin/preview', asyncRoute(async (req, res) => {
+  if (!authorizeMetadataEdit(req, res)) return;
+  const input = jellyfinSyncInput(req, res);
+  if (!input || !await verifySyncFingerprint(input, res)) return;
+  try {
+    const result = await jellyfin.preview({ targetPath: input.videoPath, ...jellyfinSyncData(input.row) });
+    res.json({ ...result, refinement_token: refinement.stateForVideo(input.row).sync_token || null });
+  } catch (error) {
+    if (error instanceof jellyfin.JellyfinError) return res.status(error.status === 404 ? 404 : 502).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.post('/api/jellyfin/sync', asyncRoute(async (req, res) => {
+  if (!authorizeMetadataEdit(req, res)) return;
+  const input = jellyfinSyncInput(req, res);
+  if (!input || !await verifySyncFingerprint(input, res)) return;
+  if (req.body?.fingerprint !== input.row.fingerprint || req.body?.visual_revision !== input.row.visual_revision) {
+    return res.status(409).json({ error: 'Video metadata changed after preview; preview the changes again' });
+  }
+  if (req.body?.refinement_token !== refinement.stateForVideo(input.row).sync_token) {
+    return res.status(409).json({ error: 'Refinement changed after preview; preview the changes again' });
+  }
+  try {
+    const result = await jellyfin.sync({ targetPath: input.videoPath, ...jellyfinSyncData(input.row) });
+    res.json(result);
+  } catch (error) {
+    if (error instanceof jellyfin.JellyfinError) return res.status(error.status === 404 ? 404 : 502).json({ error: error.message });
+    throw error;
+  }
+}));
+
+app.post('/api/refinement/review', (req, res) => {
+  if (!authorizeMetadataEdit(req, res)) return;
+  const relativePath = req.body?.path;
+  if (typeof relativePath !== 'string' || !safeResolve(relativePath)) return res.status(400).json({ error: 'Invalid path' });
+  const row = metadata.getByPath.get(relativePath);
+  if (!row) return res.status(404).json({ error: 'Video not indexed' });
+  const result = refinement.review(row.id, req.body?.input_hash, req.body?.action, req.body?.title, req.body?.summary);
+  if (result.error) return res.status(result.error === 'invalid' ? 400 : 409).json({ error: result.error === 'stale'
+    ? 'The source information changed; reload the sheet before reviewing'
+    : result.error === 'missing' ? 'The proposal is no longer available' : 'Invalid review' });
+  refinement.refreshApprovedSearch(row.id);
+  res.json({ refinement: refinement.stateForVideo(metadata.getByPath.get(relativePath)) });
+});
+
+app.get('/api/refinement/review-queue', (_req, res) => {
+  res.json({ ...refinement.reviewQueue(), can_edit: Boolean(process.env.METADATA_EDIT_TOKEN) });
+});
+
+app.post('/api/refinement/retry', (req, res) => {
+  if (!authorizeMetadataEdit(req, res)) return;
+  const relativePath = req.body?.path;
+  if (typeof relativePath !== 'string' || !safeResolve(relativePath)) return res.status(400).json({ error: 'Invalid path' });
+  const row = metadata.getByPath.get(relativePath);
+  if (!row) return res.status(404).json({ error: 'Video not indexed' });
+  if (!refinement.retry(row.id, req.body?.input_hash)) return res.status(409).json({ error: 'Source information changed; reload the sheet' });
+  res.json({ refinement: refinement.stateForVideo(row) });
 });
 
 app.post('/api/metadata/export', asyncRoute(async (req, res) => {
@@ -517,6 +796,8 @@ app.post('/api/metadata/export', asyncRoute(async (req, res) => {
     };
   });
   const faceAssignments = metadata.identifiedFacesForVideo(row.id, faceConfiguration().index_version);
+  const editorialState = refinement.stateForVideo(row);
+  const approvedRefinement = editorialState.approved;
   const exportData = {
     schema: 'pcloud-video-metadata/v1',
     exported_at: new Date().toISOString(),
@@ -559,6 +840,13 @@ app.post('/api/metadata/export', asyncRoute(async (req, res) => {
       date_clues: parsed.visual_date_clues,
       confirmed_names: parsed.confirmed_people
     },
+    editorial: approvedRefinement ? { title: approvedRefinement.title, summary: approvedRefinement.summary,
+      status: 'approved', model: editorialState.proposal.model,
+      generated_title: editorialState.proposal.generated_title,
+      generated_summary: editorialState.proposal.generated_summary,
+      prompt_version: editorialState.proposal.prompt_version,
+      generated_at: editorialState.proposal.generated_at,
+      reviewed_at: editorialState.proposal.reviewed_at } : null,
     face_model_version: faceConfiguration().index_version,
     face_identity_summary: faceAssignments.map(person => ({
       name: person.name, appearances: person.appearances, first_at_seconds: person.first_at_seconds

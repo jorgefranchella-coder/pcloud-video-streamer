@@ -1,0 +1,20 @@
+[Unit]
+Description=pCloud Video Family Metadata Refinement
+After=network-online.target pcloud-video-streamer.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+TimeoutStartSec=0
+User=jorge
+Group=jorge
+WorkingDirectory=/home/jorge/orca/workspaces/Video-Home/meta-data-videos
+Environment="VIDEO_ROOT=/mnt/pcloud/My Videos"
+Environment="DATA_DIR=/home/jorge/orca/workspaces/Video-Home/meta-data-videos/data"
+Environment=MAX_REFINEMENTS=5
+Environment=MAX_REFINEMENT_REQUESTS_PER_DAY=30
+EnvironmentFile=/etc/pcloud-video-visual.env
+EnvironmentFile=-/etc/pcloud-video-face.env
+ExecStart=/home/jorge/.hermes/node/bin/node refinement-worker.js
+StandardOutput=journal
+StandardError=journal
