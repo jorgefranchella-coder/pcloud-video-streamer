@@ -167,7 +167,7 @@ function reviewQueue(limit = 200) {
     FROM video_refinements r JOIN videos v ON v.id = r.video_id
     WHERE r.status = 'proposed' AND v.status = 'done' AND v.visual_status = 'done'
       AND v.visual_fingerprint = v.fingerprint
-    ORDER BY r.generated_at, r.id LIMIT ?`).all(limit);
+    ORDER BY r.generated_at, r.id`).iterate();
   for (const item of rows) {
     const row = metadata.getById.get(item.video_id);
     const state = stateForVideo(row);
@@ -178,6 +178,7 @@ function reviewQueue(limit = 200) {
       generated_title: state.proposal.generated_title, generated_summary: state.proposal.generated_summary,
       visual_title: item.visual_title, visual_summary: item.visual_summary
     });
+    if (items.length >= limit) break;
   }
   return { items, total: items.length, limit };
 }

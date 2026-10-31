@@ -587,6 +587,14 @@ if (currentMigration < 17) {
   db.prepare('INSERT INTO schema_migrations (version, description) VALUES (17, ?)')
     .run('Bound and schedule failed face indexing retries');
 }
+if (currentMigration < 18) {
+  db.exec(`CREATE TABLE face_assignment_cursors (
+    model_version TEXT PRIMARY KEY,
+    last_observation_id INTEGER NOT NULL DEFAULT 0
+  );`);
+  db.prepare('INSERT INTO schema_migrations (version, description) VALUES (18, ?)')
+    .run('Rotate automatic face assignment through unassigned observations');
+}
 const finalSchemaVersion = db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get().version;
 db.pragma(`user_version = ${finalSchemaVersion}`);
 db.exec('COMMIT');
@@ -1079,12 +1087,26 @@ function findFaceNeighbors(faceId, modelVersion, limit = 24, suggestionThreshold
 
 function autoAssignFaceObservations({ modelVersion, threshold, limit = 1000 }) {
   const assign = db.transaction(() => {
-    const references = db.prepare(`SELECT f.id, f.video_id, f.dimensions, f.vector
+    const batchSize = Math.min(Math.max(limit, 1), 10000);
+    const lastId = db.prepare('SELECT last_observation_id FROM face_assignment_cursors WHERE model_version = ?')
+      .get(modelVersion)?.last_observation_id || 0;
+    const selectReferences = db.prepare(`SELECT f.id, f.video_id, f.dimensions, f.vector
       FROM face_observations f JOIN videos v ON v.id = f.video_id
       WHERE f.model_version = ? AND f.review_status = 'unassigned'
         AND f.fingerprint = v.fingerprint AND v.status IN ('done', 'failed')
-      ORDER BY f.id LIMIT ?`).all(modelVersion, Math.min(Math.max(limit, 1), 10000));
+        AND f.id > ? ORDER BY f.id LIMIT ?`);
+    const references = selectReferences.all(modelVersion, lastId, batchSize);
+    if (references.length < batchSize && lastId) {
+      references.push(...db.prepare(`SELECT f.id, f.video_id, f.dimensions, f.vector
+        FROM face_observations f JOIN videos v ON v.id = f.video_id
+        WHERE f.model_version = ? AND f.review_status = 'unassigned'
+          AND f.fingerprint = v.fingerprint AND v.status IN ('done', 'failed')
+          AND f.id <= ? ORDER BY f.id LIMIT ?`).all(modelVersion, lastId, batchSize - references.length));
+    }
     if (!references.length) return { assigned: 0, considered: 0 };
+    db.prepare(`INSERT INTO face_assignment_cursors (model_version, last_observation_id)
+      VALUES (?, ?) ON CONFLICT(model_version) DO UPDATE SET last_observation_id = excluded.last_observation_id`)
+      .run(modelVersion, references.at(-1).id);
 
     const confirmed = db.prepare(`SELECT f.id, f.dimensions, f.vector, f.person_id, p.name AS person_name
       FROM face_observations f JOIN videos v ON v.id = f.video_id
